@@ -1,0 +1,132 @@
+{
+  "$comment": "Synthetic protocol examples for the MSR2 local GLT interface, constructed from the documented syntax in SenerTec 11/4798.444.000 and observed wire behaviour (true/false flags, decimal counters, 127 temperature sentinel, %5B percent-decoding). Not real device captures. Later Node.js tests can reuse this file unchanged.",
+  "read": [
+    {
+      "name": "single_key_crlf",
+      "requested": ["Hka_Bd.ulArbeitElektr"],
+      "response_text": "Hka_Bd.ulArbeitElektr=315311\r\n",
+      "expected": {"Hka_Bd.ulArbeitElektr": "315311"}
+    },
+    {
+      "name": "boolean_flags",
+      "requested": ["Hka_Bd.UHka_Anf.Anforderung.fStrom", "Mm[0].ModulSteuerung.fModulLaeuft"],
+      "response_text": "Hka_Bd.UHka_Anf.Anforderung.fStrom=false\nMm[0].ModulSteuerung.fModulLaeuft=true\n",
+      "expected": {"Hka_Bd.UHka_Anf.Anforderung.fStrom": "false", "Mm[0].ModulSteuerung.fModulLaeuft": "true"}
+    },
+    {
+      "name": "reordered_batch",
+      "requested": ["Hka_Bd_Stat.uchTeilenummer", "Hka_Bd_Stat.uchSeriennummer", "Hka_Bd.ulBetriebssekunden"],
+      "response_text": "Hka_Bd.ulBetriebssekunden=35289\nHka_Bd_Stat.uchSeriennummer=0000000001\nHka_Bd_Stat.uchTeilenummer=4700046004\n",
+      "expected": {
+        "Hka_Bd.ulBetriebssekunden": "35289",
+        "Hka_Bd_Stat.uchSeriennummer": "0000000001",
+        "Hka_Bd_Stat.uchTeilenummer": "4700046004"
+      }
+    },
+    {
+      "name": "blank_lines_and_padding",
+      "requested": ["Hka_Mw1.usDrehzahl", "Hka_Mw1.sWirkleistung"],
+      "response_text": "\n  Hka_Mw1.usDrehzahl = 1500 \n\nHka_Mw1.sWirkleistung=1.25\n",
+      "expected": {"Hka_Mw1.usDrehzahl": "1500", "Hka_Mw1.sWirkleistung": "1.25"}
+    },
+    {
+      "name": "empty_value",
+      "requested": ["Hka_Mw1.Temp.sbZS_Vorlauf2"],
+      "response_text": "Hka_Mw1.Temp.sbZS_Vorlauf2=\n",
+      "expected": {"Hka_Mw1.Temp.sbZS_Vorlauf2": ""}
+    },
+    {
+      "name": "missing_requested_key",
+      "requested": ["Hka_Bd.ulAnzahlStarts", "Mm[0].ModulSteuerung.fModulLaeuft"],
+      "response_text": "Hka_Bd.ulAnzahlStarts=12\n",
+      "expected": {"Hka_Bd.ulAnzahlStarts": "12"}
+    },
+    {
+      "name": "first_equals_splits_value",
+      "requested": ["Hka_Ew.HydraulikNr.bSpeicherArt"],
+      "response_text": "Hka_Ew.HydraulikNr.bSpeicherArt=1=2\n",
+      "expected": {"Hka_Ew.HydraulikNr.bSpeicherArt": "1=2"}
+    },
+    {
+      "name": "malformed_line",
+      "requested": ["Hka_Bd.ulAnzahlStarts"],
+      "response_text": "Hka_Bd.ulAnzahlStarts 12\n",
+      "error": "ProtocolError"
+    },
+    {
+      "name": "duplicate_key",
+      "requested": ["Hka_Bd.ulAnzahlStarts"],
+      "response_text": "Hka_Bd.ulAnzahlStarts=12\nHka_Bd.ulAnzahlStarts=13\n",
+      "error": "ProtocolError"
+    },
+    {
+      "name": "unrequested_key",
+      "requested": ["Hka_Bd.ulAnzahlStarts"],
+      "response_text": "Hka_Bd.ulAnzahlStarts=12\nHka_Bd.bWarnung=0\n",
+      "error": "ProtocolError"
+    }
+  ],
+  "write": [
+    {
+      "name": "success_reversed",
+      "fields": {
+        "Stromf_Ew.Anforderung_GLT.bAktiv": "1",
+        "Stromf_Ew.Anforderung_GLT.bAnzahlModule": "2"
+      },
+      "response_text": "Stromf_Ew.Anforderung_GLT.bAnzahlModule ok\nStromf_Ew.Anforderung_GLT.bAktiv ok\n"
+    },
+    {
+      "name": "success_direct",
+      "fields": {
+        "Stromf_Ew.Anforderung_GLT.bAktiv": "1",
+        "Stromf_Ew.Anforderung_GLT.bAnzahlModule": "0"
+      },
+      "response_text": "Stromf_Ew.Anforderung_GLT.bAktiv ok\nStromf_Ew.Anforderung_GLT.bAnzahlModule ok\n"
+    },
+    {
+      "name": "partial_acknowledgement",
+      "fields": {
+        "Stromf_Ew.Anforderung_GLT.bAktiv": "1",
+        "Stromf_Ew.Anforderung_GLT.bAnzahlModule": "1"
+      },
+      "response_text": "Stromf_Ew.Anforderung_GLT.bAktiv ok\n",
+      "error": "WriteError"
+    },
+    {
+      "name": "not_ok_status",
+      "fields": {
+        "Stromf_Ew.Anforderung_GLT.bAktiv": "1",
+        "Stromf_Ew.Anforderung_GLT.bAnzahlModule": "1"
+      },
+      "response_text": "Stromf_Ew.Anforderung_GLT.bAktiv ok\nStromf_Ew.Anforderung_GLT.bAnzahlModule error\n",
+      "error": "WriteError"
+    },
+    {
+      "name": "unexpected_acknowledgement_key",
+      "fields": {
+        "Stromf_Ew.Anforderung_GLT.bAktiv": "1",
+        "Stromf_Ew.Anforderung_GLT.bAnzahlModule": "1"
+      },
+      "response_text": "Stromf_Ew.Anforderung_GLT.bAktiv ok\nStromf_Ew.Anforderung_GLT.bAnzahlModule ok\nHka_Bd.bWarnung ok\n",
+      "error": "WriteError"
+    },
+    {
+      "name": "malformed_acknowledgement",
+      "fields": {
+        "Stromf_Ew.Anforderung_GLT.bAktiv": "1",
+        "Stromf_Ew.Anforderung_GLT.bAnzahlModule": "1"
+      },
+      "response_text": "Stromf_Ew.Anforderung_GLT.bAktiv\n",
+      "error": "WriteError"
+    },
+    {
+      "name": "duplicate_acknowledgement",
+      "fields": {
+        "Stromf_Ew.Anforderung_GLT.bAktiv": "1",
+        "Stromf_Ew.Anforderung_GLT.bAnzahlModule": "1"
+      },
+      "response_text": "Stromf_Ew.Anforderung_GLT.bAktiv ok\nStromf_Ew.Anforderung_GLT.bAktiv ok\nStromf_Ew.Anforderung_GLT.bAnzahlModule ok\n",
+      "error": "WriteError"
+    }
+  ]
+}

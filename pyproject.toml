@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "senertec-dachs"
+version = "0.1.0"
+description = "Async Python client for the SenerTec Dachs CHP unit: local MSR2 GLT interface and Dachsportal cloud"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "skuza.it" }]
+
+keywords = ["senertec", "dachs", "msr2", "chp", "cogeneration", "home-assistant"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Home Automation",
+    "Typing :: Typed",
+]
+dependencies = ["aiohttp>=3.11,<4"]
+
+[project.urls]
+Homepage = "https://github.com/skuzait/senertec-dachs"
+Repository = "https://github.com/skuzait/senertec-dachs"
+Issues = "https://github.com/skuzait/senertec-dachs/issues"
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.4,<10",
+    "pytest-asyncio>=0.24,<2",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+senertec_dachs = ["data/*.json", "py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
