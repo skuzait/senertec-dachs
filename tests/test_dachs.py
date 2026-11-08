@@ -10,6 +10,7 @@ from aiohttp import web
 
 from senertec_dachs import (
     Dachs,
+    DachsError,
     KeyType,
     LOCAL_KEYS,
     LocalClient,
@@ -99,7 +100,7 @@ DEVICE_PROPERTIES: dict[str, str] = {
     "Hka_Mw1.Aktor.fWartung": "maintenance_relay",
     # measurements
     "Hka_Mw1.sWirkleistung": "power_kw",
-    "Hka_Mw1.ulMotorlaufsekunden": "engine_runtime_seconds",
+    "Hka_Mw1.ulMotorlaufsekunden": "engine_runtime_hours",
     "Hka_Mw1.usDrehzahl": "engine_speed_rpm",
     # module statistics (scale-verified ones)
     "Mm_MinMax.bModulBhMaxWart": "max_maintenance_module",
@@ -159,7 +160,7 @@ async def test_update_then_direct_properties() -> None:
             assert dachs.power_requested is True
             assert dachs.power_kw == Decimal("1.5")
             assert dachs.engine_speed_rpm == 7
-            assert dachs.engine_runtime_seconds == Decimal("1.5")
+            assert dachs.engine_runtime_hours == Decimal("1.5")
             assert dachs.outdoor_temperature == Decimal("1.5")
             assert dachs.supply_temperature == Decimal("1.5")
             assert dachs.return_temperature == Decimal("1.5")
@@ -321,6 +322,46 @@ async def test_request_run_via_device_object() -> None:
         ]
     ]
 
+
+async def test_failed_local_update_marks_device_offline() -> None:
+    """A failed local update sets device_online=False; the error still raises."""
+    async def get(request: web.Request) -> web.Response:
+        return web.Response(status=503, text="busy")
+
+    runner, port = await start_app(get)
+    try:
+        async with Dachs("127.0.0.1", port=port) as dachs:
+            with pytest.raises(DachsError):
+                await dachs.update()
+            assert dachs.device_online is False
+            assert dachs.data_fetched_at is None
+            with pytest.raises(RuntimeError):
+                _ = dachs.snapshot  # failed update stored no snapshot
+    finally:
+        await runner.cleanup()
+
+async def test_failed_update_keeps_previous_snapshot_and_flips_offline() -> None:
+    """A later failure preserves the old snapshot but reports offline."""
+    fail = False
+
+    async def get(request: web.Request) -> web.Response:
+        if fail:
+            raise web.HTTPServiceUnavailable
+        return web.Response(text=synthetic_body(request.query.getall("k")))
+
+    runner, port = await start_app(get)
+    try:
+        async with Dachs("127.0.0.1", port=port) as dachs:
+            await dachs.update()
+            first = dachs.snapshot
+            assert dachs.device_online is True
+            fail = True
+            with pytest.raises(DachsError):
+                await dachs.update()
+            assert dachs.device_online is False
+            assert dachs.snapshot is first  # previous data preserved
+    finally:
+        await runner.cleanup()
 
 def test_constructor_arguments_are_exclusive() -> None:
     client = LocalClient("127.0.0.1")

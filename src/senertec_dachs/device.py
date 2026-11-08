@@ -35,6 +35,7 @@ from .cloud.client import (
     CloudStatus,
 )
 from .cloud.protocol import BASE_URL
+from .errors import DachsError
 from .local.client import (
     DEFAULT_MAX_URL_LENGTH,
     DEFAULT_PORT,
@@ -149,12 +150,23 @@ class Dachs:
     async def update(self) -> Snapshot:
         """Read all documented keys and refresh the cached snapshot.
 
+        The snapshot is stored only on success; a failed update leaves the
+        previous snapshot in place and raises.
+
         For the cloud backend this also refreshes :attr:`device_online`
-        and :attr:`data_fetched_at` from the portal's own status; the
-        local backend is live, so its timestamp is the read time and the
-        device counts as online.
+        and :attr:`data_fetched_at` from the portal's own status. For the
+        local backend the timestamp is the read time and the device counts
+        as online — a value that is only set after a successful response;
+        a failed update (device unreachable, timeout, rejected
+        credentials) sets :attr:`device_online` to ``False`` before the
+        error propagates.
         """
-        self._snapshot = await self._client.read_snapshot()
+        try:
+            snapshot = await self._client.read_snapshot()
+        except DachsError:
+            self._device_online = False
+            raise
+        self._snapshot = snapshot
         self._data_fetched_at = datetime.now(timezone.utc)
         self._device_online = True
         if isinstance(self._client, CloudClient):
@@ -171,9 +183,10 @@ class Dachs:
         """Whether the device was reachable for the data source.
 
         Local reads are live, so this is ``True`` after a successful
-        :meth:`update`. The portal polls the device; when it could not
-        reach it, this is ``False`` and the snapshot data is stale.
-        ``None`` before the first update or when the portal did not say.
+        :meth:`update` and ``False`` after a failed one (the error still
+        propagates). The portal polls the device; when it could not reach
+        it, this is ``False`` and the snapshot data is stale. ``None``
+        before the first update or when the portal did not say.
         """
         return self._device_online
 
@@ -357,8 +370,13 @@ class Dachs:
         return self._available(self.snapshot.measurements.engine_speed)
 
     @property
-    def engine_runtime_seconds(self) -> Decimal | None:
-        """Engine runtime since the last start, in seconds."""
+    def engine_runtime_hours(self) -> Decimal | None:
+        """Engine runtime since the last start, in hours (1/1000 precision).
+
+        The MSR2 PDF says seconds and the key name agrees, but the device
+        reports hours — same convention as the operating-hours counter.
+        The value freezes while the engine is stopped.
+        """
         return self._available(self.snapshot.measurements.runtime_since_start)
 
     # --- temperatures --------------------------------------------------------

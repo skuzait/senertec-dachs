@@ -122,6 +122,37 @@ def test_catalogue_spot_checks() -> None:
         ("Hka_Bd.ulAnzahlStarts", "1_000", ReadingState.INVALID, None),
         ("Hka_Bd.ulAnzahlStarts", "12x", ReadingState.INVALID, None),
         ("Hka_Bd.ulAnzahlStarts", "", ReadingState.INVALID, None),
+        # The Dachsportal serializes integers in exponent notation.
+        (
+            "Hka_Bd_Stat.ulInbetriebnahmedatum",
+            "3.628008E+8",
+            ReadingState.AVAILABLE,
+            362800800,
+        ),
+        (
+            "Hka_Bd_Stat.ulInbetriebnahmedatum",
+            "3.628008e8",
+            ReadingState.AVAILABLE,
+            362800800,
+        ),
+        (
+            "Hka_Bd_Stat.ulInbetriebnahmedatum",
+            "362800800",
+            ReadingState.AVAILABLE,
+            362800800,
+        ),
+        (
+            "Hka_Bd_Stat.ulInbetriebnahmedatum",
+            "362800800.0",
+            ReadingState.AVAILABLE,
+            362800800,
+        ),
+        (
+            "Hka_Bd_Stat.ulInbetriebnahmedatum",
+            "362800800.5",
+            ReadingState.INVALID,
+            None,
+        ),
         ("Hka_Ew.HydraulikNr.bSpeicherArt", "44", ReadingState.UNVERIFIED, None),
         ("Hka_Bd.ulArbeitElektr", "315311", ReadingState.AVAILABLE, Decimal("315311")),
         ("Hka_Bd.ulArbeitElektr", "0.5", ReadingState.AVAILABLE, Decimal("0.5")),

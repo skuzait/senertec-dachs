@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "senertec-dachs"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Async Python client for the SenerTec Dachs CHP unit: local MSR2 GLT interface and Dachsportal cloud"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -40,6 +40,9 @@ test = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "senertec_dachs.__version__" }
 
 [tool.setuptools.package-data]
 senertec_dachs = ["data/*.json", "py.typed"]

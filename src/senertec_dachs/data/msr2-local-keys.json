@@ -821,10 +821,10 @@
     "name": "engine runtime since start",
     "type": "decimal",
     "documented_unit": "s",
-    "normalized_unit": "s",
+    "normalized_unit": "h",
     "normalization": "identity",
-    "notes": "Seconds with millisecond precision, despite the plural key name.",
-    "source": "SenerTec 11/4798.444.000, p. 8",
+    "notes": "Key name says seconds (PDF p. 8), but the value is hours with 1/1000 precision, like Hka_Bd.ulBetriebssekunden: observed 3.737 on a running-but-idle unit where seconds would be impossible, and the portal's own msrsettings step (1/3600) confirms the hour scale. Value freezes when the engine stops.",
+    "source": "SenerTec 11/4798.444.000, p. 8; scale corrected from device observation 2026-11",
     "sentinel": null
   },
   {

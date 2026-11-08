@@ -21,6 +21,7 @@ T = TypeVar("T")
 
 _INTEGER_TOKEN = re.compile(r"^[+-]?\d+$")
 _DECIMAL_TOKEN = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$")
+_EXPONENT_TOKEN = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)[eE][+-]?\d+$")
 
 #: Slot start hours of ``Laufraster15Min_aktTag.bDoppelstunde[i]`` (PDF p. 8).
 DAILY_RUN_SLOT_START_HOURS: tuple[int, ...] = (2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 0)
@@ -116,7 +117,19 @@ class Reading(Generic[T]):
             return cls(raw, None, ReadingState.INVALID)
         if key.type is KeyType.INTEGER:
             if _INTEGER_TOKEN.match(raw) is None:
-                return cls(raw, None, ReadingState.INVALID)
+                # The Dachsportal serializes integers in exponent notation
+                # (observed: ulInbetriebnahmedatum as "3.628008E+8") and its
+                # JSON numbers may arrive as integral decimals ("362800800.0").
+                # Accept a numeric token whose value is exactly integral.
+                if (
+                    _DECIMAL_TOKEN.match(raw) is None
+                    and _EXPONENT_TOKEN.match(raw) is None
+                ):
+                    return cls(raw, None, ReadingState.INVALID)
+                value = Decimal(raw)
+                if value != value.to_integral_value():
+                    return cls(raw, None, ReadingState.INVALID)
+                return cls(raw, int(value), ReadingState.AVAILABLE)
             if key.normalization is Normalization.UNVERIFIED:
                 return cls(raw, None, ReadingState.UNVERIFIED)
             return cls(raw, int(raw), ReadingState.AVAILABLE)

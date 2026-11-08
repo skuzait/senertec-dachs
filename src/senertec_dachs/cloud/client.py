@@ -428,7 +428,11 @@ class CloudClient(SnapshotReaderMixin):
         return self._last_status
 
     async def metainfo(self) -> dict[str, Any]:
-        """Raw ``metainfoLong`` payload (product, modules, settings, …)."""
+        """Raw ``metainfoLong`` payload (product, modules, settings, …).
+
+        The portal echoes the live session ``token`` inside this payload —
+        treat the result as a secret (do not log it verbatim).
+        """
         body = await self._request("metainfoLong", {})
         if not isinstance(body, dict):
             raise ProtocolError("The Dachsportal metainfo response was not an object")
