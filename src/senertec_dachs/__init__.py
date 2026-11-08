@@ -41,7 +41,12 @@ from .models import (
     YearEndData,
 )
 
-__version__ = "0.1.0"
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
+
+try:
+    __version__: str = _pkg_version("senertec-dachs")
+except PackageNotFoundError:  # not installed (e.g. running from a source tree)
+    __version__ = "unknown"
 
 __all__ = [
     "AuthenticationError",

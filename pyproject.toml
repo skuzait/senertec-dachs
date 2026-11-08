@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77"]
+requires = ["setuptools>=77", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -41,8 +41,12 @@ test = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.setuptools.dynamic]
-version = { attr = "senertec_dachs.__version__" }
+[tool.setuptools_scm]
+# Version comes from the git tag (PEP 440: v0.2.0 -> 0.2.0).
+# Builds without git metadata fail on purpose: CI always checks out the
+# release tag, `pip install git+…` carries history, and PyPI sdists embed
+# the version in PKG-INFO. Only a GitHub zip dump has neither — and a
+# hard error beats silently shipping a wrong version number.
 
 [tool.setuptools.package-data]
 senertec_dachs = ["data/*.json", "py.typed"]
