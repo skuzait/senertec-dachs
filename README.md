@@ -178,6 +178,30 @@ a full live read can take minutes.
 Pass `on_value=callback` to receive each value as its frame arrives on
 the websocket, before the read as a whole completes.
 
+### Curated display filter
+
+The full datapoint universe of one unit is well beyond dashboard
+material: it contains per-board mirrors of the same signal, permanently
+unset telemetry (battery datapoints on a unit without one), the
+portal's own debug datapoints (random token names, HTML test strings),
+raw epoch-millisecond timestamps and configuration counters. For
+user-facing surfaces, apply the admission filter; it keeps physical
+measurements, translated enum states, and converts epoch-millisecond
+values that its name marks as a timestamp into UTC `datetime` objects:
+
+```python
+from senertec_dachs.cloud2 import CanIpDisplayFilter
+
+values = await client.read_datapoints()
+dashboard = CanIpDisplayFilter().filter(values.values())
+```
+
+`admit(value)` applies the rules one value at a time and is therefore
+suited for streaming callbacks; `filter(values)` admits a batch in
+board-priority order so mirrored boards cannot create a second element
+for the same signal. Everything else the unit exposes remains available
+unfiltered through `read_datapoints()` and the listener.
+
 ### Datapoint names
 
 The portal ships a translation table with a display name for almost

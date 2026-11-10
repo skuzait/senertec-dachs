@@ -20,6 +20,7 @@ from .cloud.client import CloudClient, CloudStatus
 from .cloud2 import (
     CanIpError as Cloud2CanIpError,
     CanIpValue as Cloud2CanIpValue,
+    CanIpDisplayFilter,
     Cloud2Client,
     Cloud2Status as Cloud2Status,
     UnitInfo as Cloud2UnitInfo,
@@ -80,6 +81,7 @@ __all__ = [
     "Cloud2Client",
     "Cloud2CanIpError",
     "Cloud2CanIpValue",
+    "CanIpDisplayFilter",
     "Cloud2Status",
     "Cloud2UnitInfo",
     "DEFAULT_GL_TIMEOUT",
