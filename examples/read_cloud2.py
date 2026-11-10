@@ -38,7 +38,11 @@ async def main() -> None:
         print(f"Outdoor:               {dachs.outdoor_temperature} °C")
         print(f"Supply temp:           {dachs.supply_temperature} °C")
 
-        # Read all native datapoints; print a few alongside the shared values.
+        # Read all native datapoints; print a few alongside the shared
+        # values. By default the read returns as soon as every datapoint
+        # has answered, live or from the portal cache; pass
+        # wait_for_live=True when you need guaranteed-live values and
+        # accept the wait.
         client = dachs.client
         assert isinstance(client, Cloud2Client)
         values = await client.read_datapoints()

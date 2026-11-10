@@ -25,6 +25,7 @@ from senertec_dachs import (
     RequestTimeoutError,
     WriteError,
 )
+from senertec_dachs.cloud2.models import CanIpValue
 
 EMAIL = "dachsportal@senertec.com"
 PASSWORD = "demo"
@@ -159,7 +160,22 @@ def _init_payload() -> dict:
         "metaDataPoints": metadata,
         "translations": {
             "en-gb": {
-                "metaDataPoints": {"translations": {}},
+                "metaDataPoints": {"translations": {
+                    IDS["MC000"]: "Total operating hours",
+                    IDS["MC001"]: "Number of starts",
+                    IDS["MC002"]: "Electrical energy",
+                    IDS["MC003"]: "Thermal energy",
+                    IDS["MM000"]: "Active power",
+                    IDS["MM001"]: "Engine speed",
+                    IDS["MM004"]: "Runtime since last start",
+                    IDS["AM027"]: "Outdoor temperature",
+                    IDS["MM011"]: "CHP inlet temperature",
+                    IDS["MM025"]: "CHP outlet temperature 1",
+                    IDS["MP033"]: "Hours at last maintenance",
+                    IDS["NP190"]: "Second heat generator request",
+                    IDS["BM001"]: "Buffer temperature",
+                    IDS["AM029"]: "Active power (meter)",
+                }},
                 "enums": [
                     {"name": "OffOn", "translations": {"0": "Off", "1": "On"}}
                 ],
@@ -183,6 +199,10 @@ class FakeDachsConnect:
         self.fail_credentials = False
         self.stale_for: set[str] = set()  # codes answered only with age>0
         self.silent_for: set[str] = set()  # codes with no frame at all
+        #: codes whose live frame is delayed; a cached frame (age>0)
+        #: arrives immediately so default reads can finish early.
+        self.slow_live_for: dict[str, float] = {}
+        self._tasks: list[asyncio.Task] = []
         self.app = web.Application()
         self.app.router.add_get("/rest/saml2/login", self.saml_login_start)
         self.app.router.add_post("/rest/saml2/acs", self.saml_acs)
@@ -208,6 +228,8 @@ class FakeDachsConnect:
         self._runner = runner
 
     async def stop(self) -> None:
+        for task in self._tasks:
+            task.cancel()
         await self._runner.cleanup()
 
     def url(self) -> str:
@@ -319,6 +341,26 @@ class FakeDachsConnect:
                     {"action": "CanipValue",
                       "data": {"sn": SERIAL, "dataPointName": IDS[code],
                                 "value": sample, "age": age, "array": False,
+                                "index": None, "boardName": "CU-CHP01",
+                                "size": False}}
+                )
+                continue
+            if code in self.slow_live_for:
+                delay = self.slow_live_for[code]
+                async def _send_live_later() -> None:
+                    await asyncio.sleep(delay)
+                    await self._frame_queue.put(
+                        {"action": "CanipValue",
+                          "data": {"sn": SERIAL, "dataPointName": IDS[code],
+                                    "value": sample, "age": 0, "array": False,
+                                    "index": None, "boardName": "CU-CHP01",
+                                    "size": False}}
+                    )
+                self._tasks.append(asyncio.create_task(_send_live_later()))
+                await self._frame_queue.put(
+                    {"action": "CanipValue",
+                      "data": {"sn": SERIAL, "dataPointName": IDS[code],
+                                "value": sample, "age": 30, "array": False,
                                 "index": None, "boardName": "CU-CHP01",
                                 "size": False}}
                 )
@@ -631,6 +673,102 @@ async def test_chart_names_and_default_chart(
         assert names == ["ChartChpActivity"]
         body = await client.chart("ChartChpActivity")
         assert body["fake"] == "chart"
+
+
+async def test_default_read_returns_before_slow_live(
+    connect_service: FakeDachsConnect,
+) -> None:
+    """The default read finishes once cache covers the request."""
+    connect_service.slow_live_for = {"MM000": 60.0}  # live value would take 60 s
+    async with make_client(connect_service, serial=SERIAL) as client:
+        await client.connect()
+        started = asyncio.get_running_loop().time()
+        values = await client.read_datapoints(["MM000", "MC002"])
+        elapsed = asyncio.get_running_loop().time() - started
+        assert elapsed < 5.0  # did not wait for the 60 s live frame
+        assert values["MM000"].value == LIVE_VALUES["MM000"]
+        assert values["MM000"].age_seconds == 30  # answered from cache
+        assert values["MC002"].raw == LIVE_VALUES["MC002"]  # gain 0.001 applied
+        assert client.values_stale is True
+
+
+async def test_wait_for_live_holds_out_for_live_answers(
+    connect_service: FakeDachsConnect,
+) -> None:
+    """wait_for_live=True keeps the request open for live values."""
+    connect_service.slow_live_for = {"MM000": 0.5}
+    async with make_client(connect_service, serial=SERIAL) as client:
+        await client.connect()
+        started = asyncio.get_running_loop().time()
+        values = await client.read_datapoints(["MM000"], wait_for_live=True)
+        elapsed = asyncio.get_running_loop().time() - started
+        assert elapsed >= 0.4  # held the request open for the live frame
+        assert values["MM000"].value == LIVE_VALUES["MM000"]
+        assert values["MM000"].age_seconds == 0  # live, not the cached copy
+        assert client.values_stale is False
+
+
+async def test_values_carry_server_display_names(
+    connect_service: FakeDachsConnect,
+) -> None:
+    """Readings expose the portal's translation-table name."""
+    async with make_client(connect_service, serial=SERIAL) as client:
+        await client.connect()
+        values = await client.read_datapoints(["MM000", "MC002"])
+        assert values["MM000"].name == "Active power"
+        assert values["MC002"].name == "Electrical energy"
+
+
+async def test_display_names_api(connect_service: FakeDachsConnect) -> None:
+    """display_names() returns the portal table; unknown languages fail."""
+    async with make_client(connect_service, serial=SERIAL) as client:
+        await client.connect()
+        names = client.display_names()
+        assert names[IDS["MM000"]] == "Active power"
+        assert names[IDS["AM027"]] == "Outdoor temperature"
+        with pytest.raises(ValueError):
+            client.display_names(language="fr-fr")
+
+
+async def test_listener_pushes_values_per_frame(
+    connect_service: FakeDachsConnect,
+) -> None:
+    """The listener converts each value frame and invokes the callback."""
+    received: list[CanIpValue] = []
+    done = asyncio.Event()
+
+    def on_value(value: CanIpValue) -> None:
+        received.append(value)
+        if len(received) >= 2:
+            done.set()
+
+    async with make_client(connect_service, serial=SERIAL) as client:
+        await client.connect()
+        client.start_listener(on_value, codes=["MM000", "MC002"], interval=60.0)
+        try:
+            await asyncio.wait_for(done.wait(), timeout=5.0)
+        finally:
+            client.stop_listener()
+        codes = {value.code for value in received}
+        assert codes == {"MM000", "MC002"}
+        assert all(value.name for value in received)
+        # stop_listener cancels the task even though the read would
+        # still wait for more frames (interval=60 s)
+        assert client._listener_task is None or client._listener_task.done()
+
+
+async def test_listener_rejects_double_start(
+    connect_service: FakeDachsConnect,
+) -> None:
+    """Only one listener can run per client."""
+    async with make_client(connect_service, serial=SERIAL) as client:
+        await client.connect()
+        client.start_listener(lambda value: None, codes=["MM000"], interval=60.0)
+        try:
+            with pytest.raises(RuntimeError):
+                client.start_listener(lambda value: None, codes=["MM000"], interval=60.0)
+        finally:
+            client.stop_listener()
 
 
 # --- writes and unavailable facade calls ------------------------------------------

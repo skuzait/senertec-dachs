@@ -156,6 +156,47 @@ omitted from the result. Each reading includes the raw value,
 server-provided unit and gain, enum translation, and age. Cached replies
 are retained and flagged by `client.values_stale`.
 
+By default the read returns as soon as every datapoint has answered,
+live or from the portal's cache; values may then be older, and each
+reading's `age_seconds` plus `client.values_stale` tell you which came
+from the cache. Pass `read_datapoints(wait_for_live=True)` to hold the
+request open for live values only and accept the wait; on slow portals
+a full live read can take minutes.
+
+Pass `on_value=callback` to receive each value as its frame arrives on
+the websocket, before the read as a whole completes.
+
+### Datapoint names
+
+The portal ships a translation table with a display name for almost
+every datapoint (4117 of 4145 on the demo unit) in each supported
+language:
+
+```python
+names = client.display_names("de-de")   # or "en-gb"; client default if omitted
+print(names["IM009"])                   # 'Temperatur WR-G Modul Frequenzumrichter'
+```
+
+Every `CanIpValue` carries its `name` (None where the portal has no
+entry). The names are the portal's own, verified against the Dachs Gen2
+GLT manual (8098.003.000.09) for the documented identification codes.
+
+### Background listener
+
+```python
+def on_value(value):
+    print(value.board, value.code, value.value, value.unit)
+
+client.start_listener(on_value, interval=60)   # every datapoint, every 60 s
+...
+client.stop_listener()
+```
+
+The listener requests datapoints on a fixed interval and invokes the
+callback for each value frame the moment it arrives on the websocket;
+errors are retried with backoff. Keep the callback fast — it runs on
+the listener's event loop.
+
 You can optionally pass codes to request a subset. Results use plain
 codes such as `MM000`, board-qualified codes when needed to distinguish
 duplicates, and indexed keys for array elements such as `AM029[0]`.

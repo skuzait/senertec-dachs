@@ -8,3 +8,5 @@ dist/
 data/senertec/spa/
 data/senertec/gen2-man-full.txt
 .venv-ref/
+cloud2-demo-*.txt
+cloud2-names.json

@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -177,6 +177,42 @@ def _parse_unit_entry(entry: Mapping[str, Any]) -> UnitInfo:
     )
 
 
+def _metadata_translations_block(
+    init: Mapping[str, Any], language: str
+) -> Mapping[str, Any] | None:
+    """The ``translations[language]["metaDataPoints"]["translations"]`` map."""
+    translations = init.get("translations")
+    if not isinstance(translations, Mapping):
+        return None
+    block = translations.get(language)
+    if not isinstance(block, Mapping):
+        return None
+    block = block.get("metaDataPoints")
+    if not isinstance(block, Mapping):
+        return None
+    mapping = block.get("translations")
+    return mapping if isinstance(mapping, Mapping) else None
+
+
+def _datapoint_display_name(
+    init: Mapping[str, Any] | None, language: str, point_id: str
+) -> str | None:
+    """Server-provided display name for one datapoint id.
+
+    The portal ships ``translations[language]["metaDataPoints"]
+    ["translations"]`` — a display-text map keyed by datapoint id (the
+    same ids the websocket frames carry). Datapoints without an entry
+    (28 of 4145 on the demo unit) return ``None``.
+    """
+    if init is None:
+        return None
+    mapping = _metadata_translations_block(init, language)
+    if mapping is None:
+        return None
+    text = mapping.get(point_id)
+    return text if isinstance(text, str) else None
+
+
 def _canip_value_from_frame(
     board: str,
     code: str,
@@ -184,8 +220,13 @@ def _canip_value_from_frame(
     data: Mapping[str, Any],
     init: Mapping[str, Any] | None,
     language: str,
-) -> CanIpValue:
-    """Build one :class:`CanIpValue` from a websocket value frame."""
+) -> CanIpValue | None:
+    """Build one :class:`CanIpValue` from a websocket value frame.
+
+    Returns ``None`` for compound wire values (dicts, lists): those
+    datapoints carry structured payload (e.g. inverter detail blocks),
+    not a scalar reading, and must not fail the whole read.
+    """
     raw = data.get("value")
     age = data.get("age")
     age_seconds = age if isinstance(age, int) and age >= 0 else 0
@@ -205,9 +246,7 @@ def _canip_value_from_frame(
     elif isinstance(raw, str):
         value = raw
     else:
-        raise ProtocolError(
-            f"CanIP value for {board}.{code} has an unsupported wire type: {type(raw).__name__}"
-        )
+        return None
     return CanIpValue(
         code=code,
         board=board,
@@ -218,7 +257,7 @@ def _canip_value_from_frame(
         gain=gain,
         enum_name=enum_name,
         age_seconds=age_seconds,
-        name=None,
+        name=_datapoint_display_name(init, language, point.id),
     )
 
 
@@ -266,6 +305,7 @@ class Cloud2Client(SnapshotReaderMixin):
         self._serial: str | None = None
         self._init: dict[str, Any] | None = None
         self._unit: dict[str, Any] | None = None
+        self._listener_task: asyncio.Task[None] | None = None
         self._catalogue: Catalogue | None = None
         self._compat_ids: dict[str, str] = {}
         self._ws: aiohttp.ClientWebSocketResponse | None = None
@@ -664,14 +704,27 @@ class Cloud2Client(SnapshotReaderMixin):
                 continue
 
     async def _collect_frames(
-        self, plans: Sequence[_Plan]
+        self,
+        plans: Sequence[_Plan],
+        *,
+        wait_for_live: bool = False,
+        on_value: Callable[[CanIpValue], None] | None = None,
     ) -> tuple[dict[str, Mapping[str, Any]], bool]:
         """POST the datapoint request and await the websocket answers.
+
+        When ``on_value`` is given, it is invoked with a typed
+        :class:`CanIpValue` as soon as each value frame arrives on the
+        websocket — before the read as a whole completes — so a caller
+        can surface values incrementally.
 
         Returns ``{md5: data}`` — live answers when available and cached
         (`age > 0`) answers as fallback — plus whether any fallback was
         used. Unanswered md5 ids are absent, which callers surface as
         missing values.
+
+        By default the wait ends as soon as every requested datapoint
+        has answered — live or from the portal's cache. With
+        ``wait_for_live`` the request stays open for live values only.
         """
         wire_keys: dict[str, str] = {}
         for plan in plans:
@@ -707,6 +760,29 @@ class Cloud2Client(SnapshotReaderMixin):
             raise ProtocolError(f"Datapoint request rejected: {message}")
 
         wanted = {key.rpartition(".")[2] for key in wire_keys}
+        plans_by_id: dict[str, list[_Plan]] = {}
+        for plan in plans:
+            plans_by_id.setdefault(plan.point.id, []).append(plan)
+
+        def _emit(data: Mapping[str, Any]) -> None:
+            if on_value is None:
+                return
+            md5 = data["dataPointName"]
+            for plan in plans_by_id.get(md5, ()):
+                if plan.point.array:
+                    index = data.get("index")
+                    if not isinstance(index, int):
+                        continue
+                    display = f"{plan.key.split('[', 1)[0]}[{index}]"
+                else:
+                    display = plan.key
+                value = _canip_value_from_frame(
+                    plan.board, display, plan.point, data,
+                    self._init, self._language,
+                )
+                if value is not None:
+                    on_value(value)
+
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self._timeout_seconds
         live: dict[str, list[Mapping[str, Any]]] = {}
@@ -716,22 +792,18 @@ class Cloud2Client(SnapshotReaderMixin):
         while True:
             now = loop.time()
             if remaining:
-                if remaining is not None and cached:
-                    uncovered = [
-                        md5
-                        for md5 in remaining
-                        if md5 not in cached
-                    ]
-                    if not uncovered:
-                        # Every outstanding md5 already answered from the
-                        # portal cache; waiting for live values would
-                        # only burn the deadline (offline unit).
-                        if settle_deadline is None:
-                            settle_deadline = now + 0.3
-                            remaining = set()
-                        left = settle_deadline - now
-                    else:
-                        left = deadline - now
+                covered = (
+                    not wait_for_live and remaining <= (set(cached) | set(live))
+                )
+                if covered:
+                    # Every outstanding datapoint already answered —
+                    # from the portal cache or live; waiting for live
+                    # values would only burn the deadline (offline unit
+                    # / cache-covered read).
+                    if settle_deadline is None:
+                        settle_deadline = now + 0.3
+                        remaining = set()
+                    left = settle_deadline - now
                 else:
                     left = deadline - now
             else:
@@ -753,10 +825,12 @@ class Cloud2Client(SnapshotReaderMixin):
                 # One cached element per md5; the live set wins later.
                 if md5 not in cached and md5 not in live:
                     cached[md5] = [data]
+                    _emit(data)
             else:
                 bucket = live.setdefault(md5, [])
                 if data not in bucket:
                     bucket.append(data)
+                    _emit(data)
                 remaining.discard(md5)
         merged: dict[str, list[Mapping[str, Any]]] = {}
         used_cache = False
@@ -806,7 +880,13 @@ class Cloud2Client(SnapshotReaderMixin):
 
     # --- native datapoint access -------------------------------------------------
 
-    async def read_datapoints(self, codes: Sequence[str] | str | None = None) -> dict[str, CanIpValue]:
+    async def read_datapoints(
+        self,
+        codes: Sequence[str] | str | None = None,
+        *,
+        wait_for_live: bool = False,
+        on_value: Callable[[CanIpValue], None] | None = None,
+    ) -> dict[str, CanIpValue]:
         """Read CanIP datapoints by stable code — the **native v2 access**.
 
         ``codes`` entries are the app/manual codes (``"MM000"``), or
@@ -823,6 +903,13 @@ class Cloud2Client(SnapshotReaderMixin):
         code (board-scoped only where the code is ambiguous).
 
         Codes the connected unit does not carry raise :class:`ValueError`.
+
+        By default the read returns as soon as every requested datapoint
+        has answered — live or from the portal's cache — which is fast
+        but may serve older values; each reading carries its
+        ``age_seconds`` and :attr:`values_stale` reports whether any
+        answer came from the cache. Pass ``wait_for_live=True`` to hold
+        the request open for live values only and accept the wait.
         """
         if self._closed:
             raise RuntimeError("Client is closed")
@@ -857,7 +944,9 @@ class Cloud2Client(SnapshotReaderMixin):
                 raise ValueError(
                     f"Datapoint not on this unit: {error.args[0]!r}"
                 ) from error
-        frames, used_cache = await self._collect_frames(plans)
+        frames, used_cache = await self._collect_frames(
+            plans, wait_for_live=wait_for_live, on_value=on_value
+        )
         self._values_stale = used_cache
 
         values: dict[str, CanIpValue] = {}
@@ -872,10 +961,12 @@ class Cloud2Client(SnapshotReaderMixin):
                     if not isinstance(index, int):
                         continue
                     display = f"{plan.key}[{index}]"
-                    values[display] = _canip_value_from_frame(
+                    value = _canip_value_from_frame(
                         plan.board, display, plan.point, data,
                         self._init, self._language,
                     )
+                    if value is not None:
+                        values[display] = value
                 continue
             picked = _pick_frame(candidates, plan.index)
             if picked is None:
@@ -887,10 +978,96 @@ class Cloud2Client(SnapshotReaderMixin):
                     f"{plan.key.split('[', 1)[0]}"
                     f"[{frame_index if isinstance(frame_index, int) else plan.index}]"
                 )
-            values[display] = _canip_value_from_frame(
+            value = _canip_value_from_frame(
                 plan.board, display, plan.point, picked, self._init, self._language
             )
+            if value is not None:
+                values[display] = value
         return values
+
+    # --- server-provided display names -------------------------------------------
+
+    def display_names(self, language: str | None = None) -> dict[str, str]:
+        """Server-provided display names keyed by datapoint id.
+
+        The portal ships a translation table for (almost) every
+        datapoint — 4117 of 4145 on the demo unit — in each supported
+        language. Datapoint ids are the same strings the websocket
+        frames carry as ``dataPointName``. Unknown language tags raise
+        :class:`ValueError`; the client must be connected.
+        """
+        if self._init is None:
+            raise RuntimeError("Client is not connected; call connect() first")
+        lang = language or self._language
+        block = _metadata_translations_block(self._init, lang)
+        if block is None:
+            raise ValueError(f"Language {lang!r} is not offered by the portal")
+        return {
+            str(key): value
+            for key, value in block.items()
+            if isinstance(value, str)
+        }
+
+    # --- background listener ------------------------------------------------------
+
+    def start_listener(
+        self,
+        callback: Callable[[CanIpValue], None],
+        *,
+        codes: Sequence[str] | str | None = None,
+        interval: float = 60.0,
+        wait_for_live: bool = False,
+    ) -> None:
+        """Read datapoints in the background and push every value frame.
+
+        One asyncio task issues a datapoint request every ``interval``
+        seconds; each value frame that arrives on the websocket is
+        converted and passed to ``callback`` immediately — values show
+        up as the unit answers, not only after a read completes. Errors
+        (portal hiccups, websocket loss) are retried with backoff.
+
+        ``callback`` runs on the listener task's event loop; keep it
+        fast. ``codes=None`` requests every datapoint of the unit.
+        Call :meth:`stop_listener` to end it. Only one listener can run
+        per client.
+        """
+        if not callable(callback):
+            raise TypeError("callback must be callable")
+        if interval <= 0:
+            raise ValueError("interval must be positive")
+        if self._listener_task is not None and not self._listener_task.done():
+            raise RuntimeError("A listener is already running; call stop_listener() first")
+        self._listener_task = asyncio.get_running_loop().create_task(
+            self._listen(callback, codes, interval, wait_for_live)
+        )
+
+    def stop_listener(self) -> None:
+        """Stop the background listener, if one is running."""
+        if self._listener_task is not None:
+            self._listener_task.cancel()
+            self._listener_task = None
+
+    async def _listen(
+        self,
+        callback: Callable[[CanIpValue], None],
+        codes: Sequence[str] | str | None,
+        interval: float,
+        wait_for_live: bool,
+    ) -> None:
+        backoff = 1.0
+        while True:
+            try:
+                await self.read_datapoints(
+                    codes, wait_for_live=wait_for_live, on_value=callback
+                )
+                backoff = 1.0
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 — a listener must survive portal hiccups
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 60.0)
+                continue
+            await asyncio.sleep(interval)
 
     # --- first-generation facade compatibility ------------------------------------
 
