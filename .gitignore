@@ -5,3 +5,6 @@ __pycache__/
 build/
 dist/
 .cloud-creds.json
+data/senertec/spa/
+data/senertec/gen2-man-full.txt
+.venv-ref/

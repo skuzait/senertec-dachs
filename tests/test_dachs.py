@@ -99,7 +99,7 @@ DEVICE_PROPERTIES: dict[str, str] = {
     "Hka_Mw1.Aktor.fUPZirkulation": "circulation_pump",
     "Hka_Mw1.Aktor.fWartung": "maintenance_relay",
     # measurements
-    "Hka_Mw1.sWirkleistung": "power_kw",
+    "Hka_Mw1.sWirkleistung": "power_w",
     "Hka_Mw1.ulMotorlaufsekunden": "engine_runtime_hours",
     "Hka_Mw1.usDrehzahl": "engine_speed_rpm",
     # module statistics (scale-verified ones)
@@ -158,7 +158,7 @@ async def test_update_then_direct_properties() -> None:
             assert dachs.fault_code == 7
             assert dachs.warning_code == 7
             assert dachs.power_requested is True
-            assert dachs.power_kw == Decimal("1.5")
+            assert dachs.power_w == 1500
             assert dachs.engine_speed_rpm == 7
             assert dachs.engine_runtime_hours == Decimal("1.5")
             assert dachs.outdoor_temperature == Decimal("1.5")
@@ -182,13 +182,15 @@ async def test_device_covers_every_verified_key() -> None:
     try:
         async with Dachs("127.0.0.1", port=port) as dachs:
             await dachs.update()
+            # power_w converts the kW reading to whole watts
+            converted = {"power_w": lambda value: int(value * 1000)}
             for wire_key, attr in DEVICE_PROPERTIES.items():
                 reading = Reading.from_raw(
                     LOCAL_KEYS[wire_key], dachs.snapshot.raw.get(wire_key)
                 )
-                expected = (
-                    reading.value if reading.state is ReadingState.AVAILABLE else None
-                )
+                expected = reading.value if reading.state is ReadingState.AVAILABLE else None
+                if expected is not None and attr in converted:
+                    expected = converted[attr](expected)
                 assert getattr(dachs, attr) == expected, attr
     finally:
         await runner.cleanup()

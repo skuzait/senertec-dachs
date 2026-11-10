@@ -1,4 +1,4 @@
-"""Example: read the same state through the SenerTec Dachsportal (cloud).
+"""Read a Dachs through the old Dachsportal cloud (DachsApp backend).
 
 No local network access needed. Set the environment:
 
@@ -25,7 +25,7 @@ async def main() -> None:
         print(f"Data fetched at:       {dachs.data_fetched_at}")
         print(f"Serial:                {dachs.serial_number}")
         print(f"Running:               {dachs.running}")
-        print(f"Power:                 {dachs.power_kw} kW")
+        print(f"Power:                 {dachs.power_w} W")
         print(f"Outdoor:               {dachs.outdoor_temperature} °C")
         print(f"Electrical:            {dachs.electrical_energy_kwh} kWh")
 

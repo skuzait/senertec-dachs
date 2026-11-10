@@ -1,7 +1,7 @@
-"""Example: publish Dachs readings to MQTT — works with either backend.
+"""Publish MSR2 local or old Dachsportal readings to MQTT.
 
-Local:  set DACHS_HOST.
-Cloud:  set DACHS_PORTAL_ID and DACHS_PORTAL_PASSWORD instead.
+MSR2 local:     set DACHS_HOST.
+Old Dachsportal: set DACHS_PORTAL_ID and DACHS_PORTAL_PASSWORD instead.
 MQTT:   MQTT_HOST (default localhost), MQTT_PREFIX (default "dachs"),
         INTERVAL_SECONDS (default 60).
 
@@ -42,7 +42,7 @@ async def main() -> None:
             await dachs.update()
             state = {
                 "running": dachs.running,
-                "power_kw": str(dachs.power_kw) if dachs.power_kw is not None else None,
+                "power_w": dachs.power_w,
                 "engine_speed_rpm": dachs.engine_speed_rpm,
                 "outdoor_temp_c": (
                     str(dachs.outdoor_temperature)

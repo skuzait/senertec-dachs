@@ -1,4 +1,4 @@
-"""Example: read the current state from a Dachs on the local network.
+"""Read a Dachs MSR2 through its local HTTP GLT interface.
 
 The host is DACHS_HOST from the environment (default 192.168.1.50).
 Run from py/ with the library installed:
@@ -18,7 +18,7 @@ async def main() -> None:
         await dachs.update()
         print(f"Serial:      {dachs.serial_number}")
         print(f"Running:     {dachs.running}")
-        print(f"Power:       {dachs.power_kw} kW")
+        print(f"Power:       {dachs.power_w} W")
         print(f"Engine:      {dachs.engine_speed_rpm} rpm")
         print(f"Outdoor:     {dachs.outdoor_temperature} °C")
         print(f"Supply:      {dachs.supply_temperature} °C")
@@ -27,7 +27,7 @@ async def main() -> None:
         print(f"Starts:      {dachs.starts}")
         print(f"Electrical:  {dachs.electrical_energy_kwh} kWh")
         print(f"Thermal:     {dachs.thermal_energy_kwh} kWh")
-        print(f"Maintenance: {'due' if dachs.maintenance_due else 'not due'}")
+        print(f"Maintenance due: {dachs.maintenance_due}")
 
 
 asyncio.run(main())

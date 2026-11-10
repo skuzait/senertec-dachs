@@ -6,7 +6,7 @@ last :class:`~senertec_dachs.models.Snapshot`. The common path is::
     async with Dachs("192.168.1.50") as dachs:
         await dachs.update()
         print(dachs.serial_number)      # plain values
-        print(dachs.power_kw)
+        print(dachs.power_w)
 
 Coverage: every documented key whose scale is confirmed has a property.
 Every property returns ``None`` unless the underlying reading is
@@ -35,6 +35,10 @@ from .cloud.client import (
     CloudStatus,
 )
 from .cloud.protocol import BASE_URL
+from .cloud2.client import DEFAULT_TIMEOUT as DEFAULT_CLOUD2_TIMEOUT
+from .cloud2.client import Cloud2Client
+from .glt.client import DEFAULT_GL_TIMEOUT
+from .glt.client import GltClient
 from .errors import DachsError
 from .local.client import (
     DEFAULT_MAX_URL_LENGTH,
@@ -74,7 +78,7 @@ class Dachs:
         self,
         host: str | None = None,
         *,
-        client: LocalClient | CloudClient | None = None,
+        client: LocalClient | CloudClient | Cloud2Client | None = None,
         port: int = DEFAULT_PORT,
         username: str = DEFAULT_USERNAME,
         password: str = "",
@@ -105,7 +109,7 @@ class Dachs:
         self._data_fetched_at: datetime | None = None
 
     @property
-    def client(self) -> LocalClient | CloudClient:
+    def client(self) -> LocalClient | CloudClient | Cloud2Client | GltClient:
         """The underlying client (raw reads, ``request_power``, extras)."""
         return self._client
 
@@ -133,6 +137,95 @@ class Dachs:
                 module=module,
                 session=session,
                 timeout=timeout,
+            )
+        )
+        # The client was created here, not by the caller, so this device
+        # object owns (and closes) it.
+        device._owns_client = True
+        return device
+
+    @classmethod
+    def cloud2(
+        cls,
+        email: str,
+        password: str,
+        *,
+        serial: str | None = None,
+        language: str = "en-gb",
+        session: aiohttp.ClientSession | None = None,
+        timeout: float = DEFAULT_CLOUD2_TIMEOUT,
+    ) -> Dachs:
+        """Create a Dachs device object backed by DachsConnect (cloud v2).
+
+        This is the DachsPortal2 backend for latest-generation Dachs
+        (MSR3 controller). ``email``/``password`` are the DachsConnect
+        account credentials. Accounts with several units must pass
+        ``serial``; the resulting client connects lazily on the first
+        update. Values are pushed live over a websocket after each
+        read, so freshness tracks the read time; check
+        :attr:`Dachs.device_online` for reachability.
+
+        The facade exposes the properties both generations share
+        (identity, energies, runtimes, power, maintenance); quantities
+        that are MSR2-specific (module flags, actuator bitfields, the
+        15-minute run grid, MSR2 fault codes) answer ``None`` here —
+        the honest absence is documented per unit in the library
+        README, and cloud2-specific data (all CanIP datapoints, Gen2
+        error entries, history charts) lives on the client:
+        ``dachs.client`` is the :class:`Cloud2Client`.
+        """
+        device = cls(
+            client=Cloud2Client(
+                email,
+                password,
+                serial=serial,
+                language=language,
+                session=session,
+                timeout=timeout,
+            )
+        )
+        # The client was created here, not by the caller, so this device
+        # object owns (and closes) it.
+        device._owns_client = True
+        return device
+
+    @classmethod
+    def glt(
+        cls,
+        host: str,
+        port: int = 502,
+        *,
+        unit_id: int = 1,
+        timeout: float = DEFAULT_GL_TIMEOUT,
+        pin: int | None = None,
+    ) -> Dachs:
+        """Create a Dachs device object backed by the Gen2 GLT Modbus interface.
+
+        This is the local interface of the latest-generation Dachs
+        (MSR3 controller, Dachs Gen2 G2.9/G5.5/F3.0/F5.5): Modbus TCP
+        on the unit's Ethernet port, spec SenerTec ``8098.119.000.02``
+        (function codes 0x04/0x06, recommended read interval 1000 ms
+        or longer). The interface is firewall-safe local access only;
+        the spec explicitly advises against exposing it externally
+        (§4.2).
+
+        ``pin`` is the 4-digit GLT pin (NP222) if the unit uses one on
+        its write area; reads need no pin. The value the GLT manual's
+        screenshots show, i.e. the unit's delivery state, is ``1234``.
+        Values common with the other backends (identity minus
+        commissioning, powers, energies, runtimes, outdoor, inlet,
+        outlet temperatures) appear on the facade like elsewhere; GLT-specific values
+        (operating status, demand type, shutdown reason, buffer
+        temperatures, per-level hours, second heat generator) live on
+        the client: ``dachs.client`` is the :class:`GltClient`.
+        Writes are a different machine-level contract from MSR2: call
+        ``dachs.client.set_power_setpoint(watts)`` (documented §6.3.2)
+        and keep it alive with its heartbeat, or the unit discards all
+        external control values after ten minutes.
+        """
+        device = cls(
+            client=GltClient(
+                host, port, unit_id=unit_id, timeout=timeout, pin=pin
             )
         )
         # The client was created here, not by the caller, so this device
@@ -176,6 +269,10 @@ class Dachs:
                     self._device_online = status.device_online
                 if status.last_fetched is not None:
                     self._data_fetched_at = status.last_fetched
+        elif isinstance(self._client, Cloud2Client):
+            status = self._client.last_status
+            if status is not None and status.device_online is False:
+                self._device_online = False
         return self._snapshot
 
     @property
@@ -362,8 +459,14 @@ class Dachs:
     # --- measurements --------------------------------------------------------
 
     @property
-    def power_kw(self) -> Decimal | None:
-        return self._available(self.snapshot.measurements.active_power)
+    def power_w(self) -> int | None:
+        kw = self._available(self.snapshot.measurements.active_power)
+        if kw is None:
+            return None
+        # The device reports kW in 0.001 steps, so its resolution is one
+        # watt and this conversion is lossless. A sub-watt remainder that
+        # some firmware might report is dropped (never observed).
+        return int(kw * 1000)
 
     @property
     def engine_speed_rpm(self) -> int | None:
