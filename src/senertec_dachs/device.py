@@ -24,6 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 from datetime import datetime, timezone
+from collections.abc import Mapping
 from typing import TypeVar
 
 import aiohttp
@@ -154,6 +155,7 @@ class Dachs:
         language: str = "en-gb",
         session: aiohttp.ClientSession | None = None,
         timeout: float = DEFAULT_CLOUD2_TIMEOUT,
+        cookies: Mapping[str, str] | None = None,
     ) -> Dachs:
         """Create a Dachs device object backed by DachsConnect (cloud v2).
 
@@ -161,7 +163,9 @@ class Dachs:
         (MSR3 controller). ``email``/``password`` are the DachsConnect
         account credentials. Accounts with several units must pass
         ``serial``; the resulting client connects lazily on the first
-        update. Values are pushed live over a websocket after each
+        update. ``cookies`` may carry a portal session from a previous
+        client (see :meth:`Cloud2Client.session_cookies`) to skip the
+        SAML login. Values are pushed live over a websocket after each
         read, so freshness tracks the read time; check
         :attr:`Dachs.device_online` for reachability.
 
@@ -182,6 +186,7 @@ class Dachs:
                 language=language,
                 session=session,
                 timeout=timeout,
+                cookies=cookies,
             )
         )
         # The client was created here, not by the caller, so this device

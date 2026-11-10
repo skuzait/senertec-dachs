@@ -439,6 +439,39 @@ def make_client(service: FakeDachsConnect, **kwargs) -> Cloud2Client:
     )
 
 
+async def test_session_cookies_reuse_skips_saml(
+    connect_service: FakeDachsConnect,
+) -> None:
+    """A valid session from cookies skips the whole SAML chain.
+
+    Discriminator: the fast path fetches init during login(), the SAML
+    path leaves init untouched until _ensure_login().
+    """
+    async with make_client(connect_service, serial=SERIAL) as first:
+        await first.connect()
+        cookies = first.session_cookies()
+        assert cookies  # the login produced session cookies
+
+    reconnect = make_client(connect_service, serial=SERIAL, cookies=cookies)
+    async with reconnect:
+        assert reconnect._init is None
+        await reconnect.login()
+        assert reconnect._logged_in
+        assert reconnect._init is not None  # fetched by the fast path
+        assert reconnect._initial_cookies is None
+
+
+async def test_stale_cookies_fall_back_to_saml(
+    connect_service: FakeDachsConnect,
+) -> None:
+    """Expired session cookies transparently trigger the full login."""
+    stale = {"PORTAL2": "definitely-expired", "JSESSIONID": "gone"}
+    async with make_client(connect_service, serial=SERIAL, cookies=stale) as client:
+        await client.connect()
+        assert client._logged_in  # recovered via the SAML chain
+        assert client._initial_cookies is None
+
+
 # --- validation -----------------------------------------------------------------
 
 

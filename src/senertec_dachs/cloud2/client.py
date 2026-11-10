@@ -37,6 +37,7 @@ from typing import Any
 from urllib.parse import quote
 
 import aiohttp
+from yarl import URL
 
 from .._reader import SnapshotReaderMixin, normalize_requested_keys
 from ..errors import (
@@ -262,7 +263,12 @@ def _canip_value_from_frame(
 
 
 class Cloud2Client(SnapshotReaderMixin):
-    """One DachsConnect session for one account (one connected unit)."""
+    """One DachsConnect session for one account (one connected unit).
+
+    Constructing with ``cookies`` (a session captured earlier via
+    :meth:`session_cookies`) skips the SAML login while that session
+    is still valid; stale cookies fall back to the normal login.
+    """
 
     def __init__(
         self,
@@ -276,6 +282,7 @@ class Cloud2Client(SnapshotReaderMixin):
         ws_url: str = WS_URL,
         session: aiohttp.ClientSession | None = None,
         timeout: float = DEFAULT_TIMEOUT,
+        cookies: Mapping[str, str] | None = None,
     ) -> None:
         if not isinstance(email, str) or not email.strip():
             raise ValueError("email must be a non-empty string")
@@ -300,6 +307,9 @@ class Cloud2Client(SnapshotReaderMixin):
         self._client_timeout = aiohttp.ClientTimeout(total=self._timeout_seconds)
         self._session = session
         self._owns_session = session is None
+        self._initial_cookies: dict[str, str] | None = (
+            {str(k): str(v) for k, v in cookies.items()} if cookies else None
+        )
         self._closed = False
         self._logged_in = False
         self._serial: str | None = None
@@ -356,9 +366,12 @@ class Cloud2Client(SnapshotReaderMixin):
         if self._closed:
             raise RuntimeError("Client is closed")
         if self._session is None:
-            self._session = aiohttp.ClientSession(
-                cookie_jar=aiohttp.CookieJar(unsafe=True)
-            )
+            jar = aiohttp.CookieJar(unsafe=True)
+            if self._initial_cookies:
+                # Session reuse: seed the jar so a valid portal session
+                # skips the whole SAML chain (see login()).
+                jar.update_cookies(self._initial_cookies, URL(self._base))
+            self._session = aiohttp.ClientSession(cookie_jar=jar)
         return self._session
 
     async def close(self) -> None:
@@ -452,12 +465,50 @@ class Cloud2Client(SnapshotReaderMixin):
 
     # --- SAML SSO login --------------------------------------------------------
 
+    def session_cookies(self) -> dict[str, str]:
+        """Current portal session cookies, for later session reuse.
+
+        Pass these to a new client's ``cookies`` argument to skip the
+        SAML chain while the session stays valid. Empty before the
+        first request created the session.
+        """
+        if self._session is None:
+            return {}
+        return {
+            cookie.key: cookie.value
+            for cookie in self._session.cookie_jar
+            if cookie.value is not None
+        }
+
     async def login(self) -> None:
-        """Perform the SAML2 SSO login. Idempotent; needed before reads."""
+        """Perform the SAML2 SSO login. Idempotent; needed before reads.
+
+        When the client was constructed with ``cookies`` from a still
+        valid portal session, the session is probed with one request
+        and the whole SAML chain (five round trips) is skipped. An
+        expired session falls back to the full login transparently.
+        """
         if self._closed:
             raise RuntimeError("Client is closed")
         if self._logged_in:
             return
+        if self._initial_cookies:
+            self._ensure_session()  # seeds the jar with the given cookies
+            status, text = await self._get("/rest/info/init")
+            if status == 200:
+                try:
+                    init = parse_json(text)
+                except ProtocolError:
+                    init = None
+                if isinstance(init, dict) and isinstance(
+                    init.get("metaDataPoints"), Mapping
+                ):
+                    self._logged_in = True
+                    if self._init is None:
+                        self._init = init
+                    self._initial_cookies = None  # now live in the jar
+                    return
+            # Session cookies stale or missing — full login below.
         status, idp_page = await self._get_url(f"{self._base}/rest/saml2/login")
         if status != 200:
             raise AuthenticationError(

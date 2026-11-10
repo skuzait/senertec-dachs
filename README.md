@@ -135,6 +135,18 @@ async with Dachs.cloud2(
     print("Cached values used:", dachs.client.values_stale)
 ```
 
+Each connect runs a SAML SSO login (about five HTTPS round trips). If your
+application creates client objects repeatedly, carry the session across:
+after a successful connect, `client.session_cookies()` returns the current
+portal session; passing it to the next client's `cookies=` argument skips
+the login entirely while the session stays valid. An expired session falls
+back to the normal login, so this is always safe:
+
+```python
+cookies = old_client.session_cookies()
+new = Dachs.cloud2(email, password, serial=serial, cookies=cookies)
+```
+
 To discover serial numbers or switch between units, use `Cloud2Client`
 directly:
 
