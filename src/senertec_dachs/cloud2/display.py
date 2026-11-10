@@ -52,6 +52,11 @@ _BOARD_PRIORITY = ("CU-", "SU", "EM", "INV", "WR-G", "WR-N")
 #: or spaces. Real display names contain spaces or common punctuation.
 _TOKEN_NAME = re.compile(r"^[A-Za-z0-9+/=]{16,}$")
 
+#: Gain-applied integer sentinels that mean "sensor not connected".
+#: 16-bit scale factors are 10 (°C*10) and 1/10 (°C/100); both produce
+#: the same two decimal numbers below.
+_TEMPERATURE_SENTINELS = frozenset({Decimal("-327.68"), Decimal("-3276.8")})
+
 #: Name parts that suggest a timestamp datapoint.
 _TIME_HINT = re.compile(r"time|date|stamp", re.IGNORECASE)
 
@@ -80,10 +85,21 @@ def _element_index(code: str) -> int | None:
         return None
 
 
-def _display_key(value: CanIpValue) -> tuple[str, int | None]:
-    """Dedupe identity: same human name + same array element."""
-    name = value.name or value.code
-    return (name.casefold(), _element_index(value.code))
+def _with_name(value: CanIpValue, name: str) -> CanIpValue:
+    """Rebuild a frozen value with a disambiguated display name."""
+    return CanIpValue(
+        code=value.code,
+        board=value.board,
+        id=value.id,
+        raw=value.raw,
+        value=value.value,
+        unit=value.unit,
+        gain=value.gain,
+        enum_name=value.enum_name,
+        age_seconds=value.age_seconds,
+        readable=value.readable,
+        name=name,
+    )
 
 
 class CanIpDisplayFilter:
@@ -97,10 +113,17 @@ class CanIpDisplayFilter:
     Rules, in order:
 
     1. The datapoint needs a server display name; nonsense token names
-       are rejected.
-    2. Mirror boards never double a signal: the first admitted value
-       for a (name, element) pair wins, and values are processed in
-       board-priority order (CU-CHP01 before accessory boards).
+       are rejected, as are gain-applied sensor sentinels
+       (``-327.68``/``-3276.8``, "sensor not connected").
+    2. Duplicate signals from other subsystems are kept, not dropped.
+       A mirror board beyond the first board-priority occurrence keeps
+       its value but gets the board as a name (``EM Actual power
+       system``); the canonical board keeps the plain name, so entity
+       names stay stable. Unnamed array elements (logs such as error
+       timestamp lists, per-zone setup rows) do not become extra
+       entities — only the current element (index 0) is admitted, and
+       only under its plain name; named arrays (``Temperature sensor
+       6``) keep every element untouched.
     3. Only measurable scalars pass: :class:`Decimal` values with a
        unit from :data:`DEFAULT_UNITS`, plus epoch timestamps which
        become :class:`datetime` (UTC). Translated enumeration values
@@ -110,12 +133,12 @@ class CanIpDisplayFilter:
 
     def __init__(self, *, allowed_units: Iterable[str] | None = None) -> None:
         self._units = frozenset(allowed_units) if allowed_units is not None else DEFAULT_UNITS
-        self._admitted: dict[tuple[str, int | None], str] = {}
+        self._boards: dict[tuple[str, int | None], str] = {}
 
     @property
-    def admitted(self) -> dict[tuple[str, int | None], str]:
-        """(display name, element index) -> board, for debug visibility."""
-        return dict(self._admitted)
+    def boards_seen(self) -> dict[tuple[str, int | None], str]:
+        """(display name, element index) -> first board, for debug."""
+        return dict(self._boards)
 
     def admit(self, value: CanIpValue) -> CanIpValue | None:
         """Return the value shaped for display, or ``None`` to reject."""
@@ -124,14 +147,31 @@ class CanIpDisplayFilter:
             return None
         if "<" in name or len(name) > 64 or _TOKEN_NAME.match(name):
             return None
-        key = _display_key(value)
-        first = self._admitted.get(key)
-        if first is None:
-            # Batch input is pre-sorted by board priority, so stream
-            # consumers (per-frame admission) keep exactly one element
-            # per (name, element) identity across mirror boards.
-            self._admitted[key] = value.board
+        # Gain-applied sensor sentinels (-32768 on the wire) mean
+        # "sensor not connected"; a dashboard must not show them.
+        if (
+            isinstance(value.value, Decimal)
+            and value.value in _TEMPERATURE_SENTINELS
+        ):
+            return None
+        index = _element_index(value.code)
+        key = (name.casefold(), index)
+        first = self._boards.get(key)
+        if first is not None and first != value.board:
+            # Subsystem copy (mirror board or second device of the
+            # same kind): keep it, but make the name its own.
+            value = _with_name(value, f"{value.board} {name}")
         else:
+            self._boards.setdefault(key, value.board)
+        if (
+            index is not None
+            and index > 0
+            and not any(char.isdigit() for char in name)
+        ):
+            # Unnamed array elements: the portal gives every element
+            # the same display name. A dashboard wants the current
+            # value (index 0) under a stable name, not the whole log
+            # history; element 0 (and numbered names) only.
             return None
 
         raw = value.raw

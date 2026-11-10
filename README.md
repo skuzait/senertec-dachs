@@ -181,13 +181,13 @@ the websocket, before the read as a whole completes.
 ### Curated display filter
 
 The full datapoint universe of one unit is well beyond dashboard
-material: it contains per-board mirrors of the same signal, permanently
-unset telemetry (battery datapoints on a unit without one), the
-portal's own debug datapoints (random token names, HTML test strings),
-raw epoch-millisecond timestamps and configuration counters. For
-user-facing surfaces, apply the admission filter; it keeps physical
-measurements, translated enum states, and converts epoch-millisecond
-values that its name marks as a timestamp into UTC `datetime` objects:
+material: it contains unset telemetry (battery datapoints on a unit
+without one), the portal's own debug datapoints (random token names,
+HTML test strings), raw epoch-millisecond timestamps, configuration
+counters, and the same signal on several boards. For user-facing
+surfaces, apply the admission filter; it keeps physical measurements,
+translated enum states, and converts epoch-millisecond values that its
+name marks as a timestamp into UTC `datetime` objects:
 
 ```python
 from senertec_dachs.cloud2 import CanIpDisplayFilter
@@ -198,9 +198,15 @@ dashboard = CanIpDisplayFilter().filter(values.values())
 
 `admit(value)` applies the rules one value at a time and is therefore
 suited for streaming callbacks; `filter(values)` admits a batch in
-board-priority order so mirrored boards cannot create a second element
-for the same signal. Everything else the unit exposes remains available
-unfiltered through `read_datapoints()` and the listener.
+board-priority order so the canonical board keeps the plain name.
+Duplicate signals from other subsystems are kept, not dropped: a mirror
+board beyond the first occurrence gets the board as a name
+(``EM Actual power system``). Unnamed array elements (error timestamp
+logs, per-zone setup rows) stay out of the display set; only the
+current element is admitted, under its plain name, and named arrays
+(``Temperature sensor 6``) keep every element. Everything else the
+unit exposes remains available unfiltered through `read_datapoints()`
+and the listener.
 
 ### Datapoint names
 

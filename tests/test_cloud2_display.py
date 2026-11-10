@@ -69,7 +69,7 @@ def test_array_elements_keep_their_index_identity() -> None:
     v1 = value("AM029[1]", name="Temperature sensor 6", raw=42.0, unit="°C")
     assert flt.admit(v0) is v0
     assert flt.admit(v1) is v1
-    assert len(flt.admitted) == 2
+    assert len(flt.boards_seen) == 2
 
 
 # --- the junk classes from the real unit ----------------------------------------
@@ -143,27 +143,51 @@ def test_translated_enum_state_passes(flt: CanIpDisplayFilter) -> None:
     assert flt.admit(v) is v
 
 
-# --- board mirrors ---------------------------------------------------------------
+# --- subsystem duplicates are kept, names get prefixes ---------------------------
 
-def test_mirror_board_is_deduped(flt: CanIpDisplayFilter) -> None:
+def test_mirror_board_kept_with_board_prefix(flt: CanIpDisplayFilter) -> None:
     primary = value("CU-CHP01.MM000", "CU-CHP01", name="Requested Level", raw=3, unit="kW")
     mirror = value("EM.MM000", "EM", name="Requested Level", raw=3, unit="kW")
-    assert flt.filter([mirror, primary]) == [primary]
-    assert flt.admitted[(("requested level".casefold()), None)] == "CU-CHP01"
+    out = flt.filter([mirror, primary])
+    assert len(out) == 2
+    assert out[0].name == "Requested Level"            # CU-CHP01: canonical, plain
+    assert out[1].name == "EM Requested Level"        # mirror: subsystem prefix
+    assert flt.boards_seen[("requested level", None)] == "CU-CHP01"
 
 
-def test_mirror_batch_order_is_irrelevant() -> None:
-    flt = CanIpDisplayFilter()
-    values = [
-        value("WR-N.MM000", "WR-N", name="Buffer power %", raw=0.0, unit="%"),
-        value("EM.MM000", "EM", name="Buffer power %", raw=0.0, unit="%"),
-        value("CU-CHP01.MM000", "CU-CHP01", name="Buffer power %", raw=0.0, unit="%"),
-    ]
-    out = flt.filter(values)
-    assert [v.board for v in out] == ["CU-CHP01"]
-    # rerunning the whole batch after a consumer anchored the entity must
-    # not add mirror entities either
-    assert flt.filter(values) == []
+def test_same_datapoint_twice_from_same_board_keeps_name(flt: CanIpDisplayFilter) -> None:
+    v = value("CU-CHP01.MM000", "CU-CHP01", name="Buffer power %", raw=0.0, unit="%")
+    assert flt.admit(v) is v
+    again = value("CU-CHP01.MM000", "CU-CHP01", name="Buffer power %", raw=0.0, unit="%")
+    out = flt.admit(again)
+    assert out is not None and out.name == "Buffer power %"
+
+
+def test_unnamed_array_elements_beyond_first_excluded(flt: CanIpDisplayFilter) -> None:
+    out = flt.filter(
+        [
+            value("AW001[0]", name="Error time stamps", raw=1794311900500),
+            value("AW001[1]", name="Error time stamps", raw=1794262458200),
+            value("AW001[39]", name="Error time stamps", raw=1791647514000),
+        ]
+    )
+    assert [v.name for v in out] == ["Error time stamps"]  # current log entry only
+
+
+def test_numbered_sensor_names_are_not_suffixed(flt: CanIpDisplayFilter) -> None:
+    v = value("AM029[5]", name="Temperature sensor 6", raw=44.2, unit="°C")
+    out = flt.admit(v)
+    assert out is v  # portal name carries the position; stays untouched
+
+
+def test_zone_rows_collapse_to_current(flt: CanIpDisplayFilter) -> None:
+    out = flt.filter(
+        [
+            value("AW002[0]", name="Zone RoomTemperature", raw=20.0, unit="°C"),
+            value("AW002[1]", name="Zone RoomTemperature", raw=6.0, unit="°C"),
+        ]
+    )
+    assert [v.name for v in out] == ["Zone RoomTemperature"]
 
 
 # --- timestamps -------------------------------------------------------------------
@@ -188,4 +212,30 @@ def test_time_without_epoch_scale_is_not_converted(flt: CanIpDisplayFilter) -> N
 
 def test_mcu_uptime_seconds_pass(flt: CanIpDisplayFilter) -> None:
     v = value("B0008", name="MCU uptime", raw=2_666_963.0, unit="s")
+    assert flt.admit(v) is v
+
+
+def test_sensor_array_keeps_every_element() -> None:
+    flt = CanIpDisplayFilter()
+    for i, raw in enumerate((-0.0, 44.2, -0.0)):
+        v = value(f"AM029[{i}]", name="Temperature sensor 5", raw=raw, unit="°C")
+        assert flt.admit(v) is not None, f"element {i}"
+
+
+def test_outdoor_array_family_keeps_elements() -> None:
+    flt = CanIpDisplayFilter()
+    v = value("AW003[3]", name="T-sensor buffer 1", raw=10.0, unit="°C")
+    assert flt.admit(v) is not None
+
+
+# --- gain-applied sentinels -------------------------------------------------------
+
+def test_temperature_sentinel_rejected(flt: CanIpDisplayFilter) -> None:
+    for raw in (-327.68, -3276.8):
+        v = value("AW004[0]", name="TOutdoor AvShortWind", raw=raw, unit="°C")
+        assert flt.admit(v) is None, f"sentinel {raw}"
+
+
+def test_large_negative_real_temperature_passes(flt: CanIpDisplayFilter) -> None:
+    v = value("AW005[0]", name="Min outdoor T HP", raw=-15.0, unit="°C")
     assert flt.admit(v) is v
