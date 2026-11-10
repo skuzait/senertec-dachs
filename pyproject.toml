@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "senertec-dachs"
 dynamic = ["version"]
-description = "Async Python client for the SenerTec Dachs CHP unit: local MSR2 GLT interface and Dachsportal cloud"
+description = "Async Python client for SenerTec Dachs combined heat and power units (BHKWs). Supports local access to MSR2 and MSR3 controllers, the old Dachsportal cloud, and the newer DachsConnect cloud."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
