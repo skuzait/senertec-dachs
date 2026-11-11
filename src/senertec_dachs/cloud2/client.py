@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -68,6 +69,8 @@ from .protocol import (
 
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_LANG = "en-gb"
+
+_LOGGER = logging.getLogger(__name__)
 
 _EPOCH_2000_SECONDS = 946684800
 _ACTION_VALUE = "CanipValue"
@@ -632,6 +635,31 @@ class Cloud2Client(SnapshotReaderMixin):
         self._catalogue = None
         self._compat_ids = {}
 
+    async def _recover_session(self) -> None:
+        """Re-login and reconnect after the portal session expired.
+
+        Discards the stale session without a server-side logout (the
+        session is already dead — a logout request would fail with the
+        same 401), then runs the full SAML login and reconnects the
+        requested unit. Raises whatever login or connect raise, so a
+        caller that retries after this succeeds only when the recovery
+        actually produced a fresh, connected session.
+        """
+        _LOGGER.debug(
+            "DachsConnect session expired; performing a fresh login "
+            "and reconnecting unit %s",
+            _mask_serial(self._requested_serial),
+        )
+        await self._shutdown_ws()
+        self._logged_in = False
+        self._serial = None
+        self._unit = None
+        self._catalogue = None
+        self._compat_ids = {}
+        await self._ensure_login()
+        await self.connect()
+        await self._ensure_ws()
+
     async def switch_unit(self, serial: str) -> None:
         """Connect a different unit of the account by serial number."""
         if not isinstance(serial, str) or not serial or "@" in serial:
@@ -798,6 +826,16 @@ class Cloud2Client(SnapshotReaderMixin):
         status, text = await self._post(
             f"/rest/canip/{_path_segment(self._serial)}/request", body
         )
+        if status == 401:
+            # The portal session can expire mid-connection — the unit
+            # stays connected on the server, but the session cookie no
+            # longer carries it (long runtimes, network outages).
+            # Recover transparently: full SAML login again, reconnect
+            # the unit, retry the request once.
+            await self._recover_session()
+            status, text = await self._post(
+                f"/rest/canip/{_path_segment(self._serial)}/request", body
+            )
         if status != 200:
             raise HttpError(
                 f"DachsConnect returned HTTP {status} for the datapoint request",

@@ -218,6 +218,8 @@ class FakeDachsConnect:
         self._ws: web.WebSocketResponse | None = None
         self._frame_queue: asyncio.Queue[dict] = asyncio.Queue()
         self.deny_write = False
+        #: Next /request POST answers 401 once (expired session).
+        self.expire_next_request = False
 
     async def start(self) -> None:
         runner = web.AppRunner(self.app)
@@ -309,6 +311,9 @@ class FakeDachsConnect:
     async def rest_request(self, request: web.Request) -> web.Response:
         payload = json.loads(await request.text())
         self.request_payloads.append(payload)
+        if self.expire_next_request:
+            self.expire_next_request = False
+            return web.json_response({"message": "session expired"}, status=401)
         for key in payload["keys"]:
             code = next(c for c, md5 in IDS.items() if key.endswith(md5))
             if code in self.silent_for:
@@ -411,6 +416,12 @@ class FakeDachsConnect:
                     continue
                 if frame == "__close__":
                     await ws.close()
+                    return ws
+                if self._ws is not ws:
+                    # A newer connection took over (client reconnect):
+                    # give the frame back so the current connection
+                    # serves it.
+                    self._frame_queue.put_nowait(frame)
                     return ws
                 await ws.send_str(json.dumps(frame))
         except (asyncio.CancelledError, ConnectionResetError, RuntimeError):
@@ -645,6 +656,37 @@ async def test_unknown_datapoint_raises(connect_service: FakeDachsConnect) -> No
     async with make_client(connect_service, serial=SERIAL) as client:
         with pytest.raises(ValueError):
             await client.read_datapoints(["ZZ999"])
+
+
+async def test_expired_session_recovers_with_relogin(
+    connect_service: FakeDachsConnect,
+) -> None:
+    """A mid-session 401 transparently re-logins, reconnects, retries once."""
+    async with make_client(connect_service, serial=SERIAL) as client:
+        await client.connect()
+        acs_before = connect_service.acs_calls
+        connect_service.expire_next_request = True
+        values = await client.read_datapoints(["MM000"])
+        assert values["MM000"].value == Decimal("5500")
+        # the full SAML chain ran exactly one more time, and the same
+        # datapoint request was retried after the recovery
+        assert connect_service.acs_calls == acs_before + 1
+        assert len(connect_service.request_payloads) == 2
+        assert client._logged_in
+
+
+async def test_unrecoverable_session_raises(
+    connect_service: FakeDachsConnect,
+) -> None:
+    """When the re-login itself fails, the read raises honestly."""
+    async with make_client(connect_service, serial=SERIAL) as client:
+        await client.connect()
+        connect_service.expire_next_request = True
+        connect_service.fail_credentials = True
+        with pytest.raises(AuthenticationError):
+            await client.read_datapoints(["MM000"])
+        # one expired request, no successful retry
+        assert len(connect_service.request_payloads) == 1
 
 
 async def test_read_datapoints_without_codes_reads_everything(
