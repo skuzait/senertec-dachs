@@ -3,6 +3,13 @@
 from .client import DEFAULT_LANG, DEFAULT_TIMEOUT, Cloud2Client
 from .catalog import COMPAT_BY_KEY, COMPAT_KEYS, CompatSpec
 from .display import DEFAULT_UNITS, CanIpDisplayFilter
+from .history import (
+    DailyElectric,
+    DailyHeat,
+    DailyRun,
+    ShutdownSample,
+    UnitDetails,
+)
 from .models import CanIpError, CanIpValue, Cloud2Status, UnitInfo
 
 __all__ = [
@@ -18,4 +25,9 @@ __all__ = [
     "UnitInfo",
     "CanIpDisplayFilter",
     "DEFAULT_UNITS",
+    "DailyElectric",
+    "DailyHeat",
+    "DailyRun",
+    "ShutdownSample",
+    "UnitDetails",
 ]

@@ -56,6 +56,17 @@ from .catalog import (
     build_catalogue,
     compat_resolution,
 )
+from .history import (
+    DailyElectric,
+    DailyHeat,
+    DailyRun,
+    ShutdownSample,
+    UnitDetails,
+    daily_electric_rows,
+    daily_heat_rows,
+    daily_run_rows,
+    shutdown_rows,
+)
 from .models import CanIpError, CanIpValue, Cloud2Status, UnitInfo
 from .protocol import (
     BASE_URL,
@@ -104,6 +115,24 @@ class _Plan:
     board: str
     point: MetaDataPoint
     index: int | None  # explicit array element plan
+
+
+def _text(value: Any) -> str | None:
+    """Optional text from a unit payload field."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _int_or_none(value: Any) -> int | None:
+    """Optional int from a unit payload field."""
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _mask_serial(serial: str | None) -> str:
@@ -1323,6 +1352,88 @@ class Cloud2Client(SnapshotReaderMixin):
         if not isinstance(body, dict):
             raise ProtocolError(f"The chart {name!r} response was not an object")
         return body
+
+    # --- typed history aggregates -----------------------------------------------
+
+    async def _history_chart(self, name: str, *, hours: int) -> dict[str, Any]:
+        """Fetch one chart over the last ``hours`` hours."""
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(hours=hours)
+        return await self.chart(name, start=start, end=end)
+
+    async def daily_electric(self, *, hours: int = 48) -> list[DailyElectric]:
+        """Per-day electric energy accounting (Wh charts → kWh).
+
+        Rows are daily; days with incomplete answers are skipped. The
+        latest day is the running total of today, not a closed day.
+        """
+        producing = await self._history_chart("ChartEnergyProducing", hours=hours)
+        balance = await self._history_chart("ChartElectricityBalance", hours=hours)
+        return daily_electric_rows(producing, balance)
+
+    async def daily_heat(self, *, hours: int = 48) -> list[DailyHeat]:
+        """Per-day produced heat (the "Produzierte Wärme heute" card)."""
+        balance = await self._history_chart("ChartElectricityBalance", hours=hours)
+        return daily_heat_rows(balance)
+
+    async def daily_run(self, *, hours: int = 48) -> list[DailyRun]:
+        """Per-day operating hours and starts (cumulative hourly rows)."""
+        operating = await self._history_chart("ChartOperatingData", hours=hours)
+        return daily_run_rows(operating)
+
+    async def shutdown_history(self, *, hours: int = 25) -> list[ShutdownSample]:
+        """Hourly device-state / shutdown-reason samples ("Letzte
+        Abschaltgründe").
+
+        Reasons are translated through the portal's ``ShutDownReason``
+        enum, device states through ``DeviceState``; unknown codes
+        stay raw integers.
+        """
+        chart = await self._history_chart("ChartChpStatus", hours=hours)
+        return shutdown_rows(
+            chart,
+            init=self._init,
+            language=self._language,
+            translate_enum=lambda name, raw: _enum_translation(
+                self._init, self._language, name, raw
+            ),
+        )
+
+    def unit_details(self) -> UnitDetails:
+        """Static unit identity from the connected unit payload."""
+        unit = self._unit
+        if not isinstance(unit, Mapping):
+            raise RuntimeError("No unit connected — call connect() first")
+        raw_date = unit.get("inbetriebnahmeDatum")
+        commissioning = None
+        if isinstance(raw_date, (int, float)) and raw_date > 0:
+            commissioning = datetime.fromtimestamp(raw_date / 1000, tz=timezone.utc)
+        warnings = unit.get("warnings")
+        return UnitDetails(
+            serial=_text(unit.get("seriennummer")),
+            model=_text(unit.get("benennung")),
+            product_group=_text(unit.get("productGroup")),
+            article_number=_text(unit.get("artikelNummer")),
+            commissioning_date=commissioning,
+            operator_name=_text(unit.get("betreiberName")),
+            location_name=_text(unit.get("standortName")),
+            address=_text(unit.get("standortAdresse")),
+            postal_code=_text(unit.get("standortPlz")),
+            city=_text(unit.get("standortOrt")),
+            country_code=_int_or_none(unit.get("standortLand")),
+            contact_name=_text(unit.get("standortAnsprech")),
+            phone=_text(unit.get("standortTelefon")),
+            lead_unit_serial=_text(unit.get("leitHkaSn")),
+            module_number=_int_or_none(unit.get("module_nr")),
+            has_service_contract=(
+                bool(unit["hasVertrag"]) if isinstance(unit.get("hasVertrag"), bool) else None
+            ),
+            warnings=tuple(
+                str(w) for w in warnings if w is not None
+            ) if isinstance(warnings, (list, tuple)) else (),
+            connected=unit.get("connected") is True,
+            online=unit.get("online") is True,
+        )
 
     async def write_datapoint(
         self, code: str, value: Any, *, board: str | None = None

@@ -208,6 +208,25 @@ current element is admitted, under its plain name, and named arrays
 unit exposes remains available unfiltered through `read_datapoints()`
 and the listener.
 
+### Daily aggregates and unit identity (cloud v2)
+
+The portal website derives its daily cards from a separate chart
+endpoint. The client types those answers:
+
+```python
+await client.connect()
+days = await client.daily_electric()    # per-day kWh: self-consumed, fed-in, grid in/out
+heat = await client.daily_heat()        # per-day produced heat (kWh)
+run = await client.daily_run()          # per-day operating hours + starts
+shots = await client.shutdown_history() # hourly device state + shutdown reason
+print(client.unit_details().model)      # "Dachs Gen2 F5.5", serial, commissioning date, warnings
+```
+
+Each list is ordered oldest to newest; the last row of `daily_*` is
+the running total of the current day. Chart fields were verified
+against the production portal; anything not verifiable from the wire
+stays out of the typed records.
+
 ### Datapoint names
 
 The portal ships a translation table with a display name for almost
