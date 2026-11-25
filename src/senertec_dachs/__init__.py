@@ -17,14 +17,16 @@ from .errors import (
 )
 from .keys import LOCAL_KEYS
 from .cloud.client import CloudClient, CloudStatus
-from .cloud2 import (
-    CanIpError as Cloud2CanIpError,
-    CanIpValue as Cloud2CanIpValue,
-    CanIpDisplayFilter,
-    Cloud2Client,
-    Cloud2Status as Cloud2Status,
-    UnitInfo as Cloud2UnitInfo,
-)
+# cloud2 (DachsConnect) not published yet — implementation stays in the
+# senertec_dachs.cloud2 subpackage; re-enable these exports when it is.
+# from .cloud2 import (
+#     CanIpError as Cloud2CanIpError,
+#     CanIpValue as Cloud2CanIpValue,
+#     CanIpDisplayFilter,
+#     Cloud2Client,
+#     Cloud2Status as Cloud2Status,
+#     UnitInfo as Cloud2UnitInfo,
+# )
 from .glt import (
     DEFAULT_GL_TIMEOUT,
     GltClient,
@@ -78,12 +80,13 @@ __all__ = [
     "Dachs",
     "CloudClient",
     "CloudStatus",
-    "Cloud2Client",
-    "Cloud2CanIpError",
-    "Cloud2CanIpValue",
-    "CanIpDisplayFilter",
-    "Cloud2Status",
-    "Cloud2UnitInfo",
+    # cloud2 exports return when DachsConnect ships.
+    # "Cloud2Client",
+    # "Cloud2CanIpError",
+    # "Cloud2CanIpValue",
+    # "CanIpDisplayFilter",
+    # "Cloud2Status",
+    # "Cloud2UnitInfo",
     "DEFAULT_GL_TIMEOUT",
     "GltClient",
     "GltModuleCounts",

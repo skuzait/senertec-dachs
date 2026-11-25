@@ -5,8 +5,12 @@
 ![License](https://img.shields.io/pypi/l/senertec-dachs)
 
 Async Python client for SenerTec Dachs combined heat and power units
-(BHKWs). Supports local access to MSR2 and MSR3 controllers, the old
-Dachsportal cloud, and the newer DachsConnect cloud.
+(BHKWs). Supports local access to MSR2 controllers, the old Dachsportal
+cloud, and — experimental, verification against a real Gen2 unit still
+pending — MSR3 (Gen2) controllers. Support for the newer DachsConnect
+cloud (cloud2) is **in development and not yet published** — the code
+lives in the `senertec_dachs.cloud2` subpackage but is not part of the
+stable API.
 
 ## Installation
 
@@ -22,12 +26,14 @@ Requires Python 3.11 or later. The only runtime dependency is `aiohttp`.
 |---|---|---|---|
 | `local` | MSR2 local access | `Dachs(host)` | HTTP, port 8080 |
 | `cloud` | Old Dachsportal cloud, used by the DachsApp | `Dachs.cloud(portal_id, password)` | Portal ID and DachsApp password |
-| `cloud2` | New DachsConnect / DachsPortal2 cloud | `Dachs.cloud2(email, password, serial=...)` | Account email and password |
-| `glt` | MSR3 local access on Dachs Gen2 | `Dachs.glt(host)` | Modbus TCP, port 502 |
+| `glt` | MSR3 local access on Dachs Gen2 (**experimental**) | `Dachs.glt(host)` | Modbus TCP, port 502 |
 
-All four use `await dachs.update()` followed by property access. Available
+All three use `await dachs.update()` followed by property access. Available
 readings and control methods depend on the backend. A property returns
 `None` when that backend does not supply it; this does not mean zero or off.
+
+> A fourth backend, `cloud2` (new DachsConnect / DachsPortal2 cloud), is
+> in development and **not yet published**.
 
 ## Read a device
 
@@ -113,6 +119,9 @@ async with Dachs.cloud("12345", "dachsapp-password") as dachs:
 Statistics use inclusive `YYYY-M` month ranges. Reports may contain
 operator contact details. The raw `client.metainfo()` response can include
 a session token, so do not log it verbatim.
+
+<!-- cloud2 (DachsConnect) is in development and not yet published;
+     the sections below return with it.
 
 ### New DachsConnect cloud (`cloud2`)
 
@@ -268,7 +277,13 @@ and MSR2 fault codes, return `None`. Native methods also include
 `get_errors()` for board errors and `chart_names()` / `chart(name)` for
 historical data.
 
+-->
+
 ### MSR3 local access (`glt`)
+
+> **Experimental.** This backend was built from the GLT register-map
+> documentation and still needs verification against a real Dachs Gen2
+> unit — feedback from anyone with access to one is welcome.
 
 On a Dachs Gen2, enable the GLT interface using parameter NP221. This is a
 Modbus TCP connection, not the MSR2 HTTP interface. Reads require no PIN.
@@ -390,10 +405,12 @@ echo confirms delivery, not PIN validity or controller acceptance.
 
 ### DachsConnect cloud
 
-`write_datapoint()` provides an experimental native write interface. It
-has not been verified against a live account. `request_run()` and
-`request_power(modules)` raise `WriteError` on both the `cloud2` and `glt`
-backends because their control interfaces differ from MSR2.
+<!-- cloud2 (DachsConnect) is in development and not yet published;
+     its experimental write interface (`write_datapoint()`) returns with it.
+`request_run()` and `request_power(modules)` raise `WriteError` on the
+`cloud2` and `glt` backends because their control interfaces differ from
+MSR2.
+-->
 
 ## Error handling
 
@@ -443,12 +460,13 @@ the library installed, for example `python examples/read_local.py`.
 |---|---|
 | [read_local.py](examples/read_local.py) | MSR2 local readings (`DACHS_HOST`) |
 | [read_cloud.py](examples/read_cloud.py) | Old Dachsportal (`DACHS_PORTAL_ID`, `DACHS_PORTAL_PASSWORD`) |
-| [read_cloud2.py](examples/read_cloud2.py) | DachsConnect shared properties and all native datapoints (`DACHS_CONNECT_EMAIL`, `DACHS_CONNECT_PASSWORD`, optional `DACHS_CONNECT_SERIAL`) |
 | [read_glt.py](examples/read_glt.py) | MSR3 local readings (`DACHS_GLT_HOST`, optional `DACHS_GLT_PIN`) |
 | [read_all.py](examples/read_all.py) | Every MSR2 catalogue key and its reading state |
 | [mqtt_publish.py](examples/mqtt_publish.py) | MSR2 local or old Dachsportal readings to MQTT; requires `paho-mqtt` |
 
-The four `read_*` backend examples do not send control commands.
+The `read_*` backend examples do not send control commands. A
+`read_cloud2.py` example for the (still unpublished) DachsConnect backend
+ships with the release that publishes cloud2.
 
 ## Development
 

@@ -18,13 +18,13 @@ from aiohttp import web
 
 from senertec_dachs import (
     AuthenticationError,
-    Cloud2CanIpError,
-    Cloud2Client,
     Dachs,
     ProtocolError,
     RequestTimeoutError,
     WriteError,
 )
+# cloud2 exports are unpublished; import from the subpackage.
+from senertec_dachs.cloud2 import CanIpError as Cloud2CanIpError, Cloud2Client
 from senertec_dachs.cloud2.models import CanIpValue
 
 EMAIL = "dachsportal@senertec.com"

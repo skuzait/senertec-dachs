@@ -13,7 +13,10 @@ import asyncio
 import os
 import sys
 
-from senertec_dachs import Cloud2Client, Dachs
+# cloud2 (DachsConnect) is not published yet; the example and the
+# subpackage stay for when it ships.
+from senertec_dachs import Dachs
+from senertec_dachs.cloud2 import Cloud2Client
 
 
 async def main() -> None:
