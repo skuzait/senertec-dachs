@@ -4,40 +4,32 @@
 ![Python](https://img.shields.io/pypi/pyversions/senertec-dachs)
 ![License](https://img.shields.io/pypi/l/senertec-dachs)
 
-Async Python client for SenerTec Dachs combined heat and power units
-(BHKWs). Supports local access to MSR2 controllers, the old Dachsportal
-cloud, and — experimental, verification against a real Gen2 unit still
-pending — MSR3 (Gen2) controllers. Support for the newer DachsConnect
-cloud (cloud2) is **in development and not yet published** — the code
-lives in the `senertec_dachs.cloud2` subpackage but is not part of the
-stable API.
+Read and control SenerTec Dachs units from Python. Use the local MSR2
+interface or the older Dachsportal used by the DachsApp. Local MSR3
+support is experimental. The newer DachsConnect portal is not supported
+in this release.
 
 ## Installation
 
 ```sh
-pip install senertec-dachs
+python -m pip install senertec-dachs
 ```
 
-Requires Python 3.11 or later. The only runtime dependency is `aiohttp`.
+Requires Python 3.11 or later.
 
 ## Choose a connection
 
-| Backend | Device or service | Entry point | Connection |
-|---|---|---|---|
-| `local` | MSR2 local access | `Dachs(host)` | HTTP, port 8080 |
-| `cloud` | Old Dachsportal cloud, used by the DachsApp | `Dachs.cloud(portal_id, password)` | Portal ID and DachsApp password |
-| `glt` | MSR3 local access on Dachs Gen2 (**experimental**) | `Dachs.glt(host)` | Modbus TCP, port 502 |
-
-All three use `await dachs.update()` followed by property access. Available
-readings and control methods depend on the backend. A property returns
-`None` when that backend does not supply it; this does not mean zero or off.
-
-> A fourth backend, `cloud2` (new DachsConnect / DachsPortal2 cloud), is
-> in development and **not yet published**.
+| Connection | Use it for | Python |
+| --- | --- | --- |
+| MSR2 on your local network | GLT over HTTP, port 8080 | `Dachs(host)` |
+| Older Dachsportal | DachsApp access with a portal ID and password | `Dachs.cloud(portal_id, password)` |
+| MSR3 / Gen2 on your local network (experimental) | GLT over Modbus TCP, port 502 | `Dachs.glt(host)` |
 
 ## Read a device
 
-This complete example reads an MSR2 unit on the local network:
+Enable GLT on your MSR2 Ethernet board and replace `192.168.1.50` with
+your unit's IP address. The default username is `glt`. If you set a GLT
+password, pass it as `password=` when creating `Dachs`.
 
 ```python
 import asyncio
@@ -58,38 +50,24 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-`update()` performs the read and stores a snapshot. Properties read that
-snapshot without making further requests. Call `update()` again to refresh
-it. Accessing readings before the first successful update raises
-`RuntimeError`.
+`update()` reads the unit. Properties use that snapshot without making
+another request, so call `update()` again when you need fresh values.
+Before the first successful update, reading a property raises
+`RuntimeError`. A property returns `None` if the connection does not
+provide a reading.
 
-Use an `async with` block to close the connection when finished. If you
-create a client yourself and pass it to `Dachs(client=client)`, you are
-responsible for closing that client.
+`async with` closes the connection when you leave the block. If you pass
+your own client with `Dachs(client=client)`, close that client yourself.
 
-The following snippets belong inside an async function, like `main()` above.
+The examples below go inside an `async` function like `main()`.
 
-### MSR2 local access
+For raw MSR2 keys, use `await dachs.client.read_keys([...])` inside the
+connection block.
 
-Enable the GLT interface on the MSR2 Ethernet board. The client defaults
-to port 8080, username `glt`, and an empty password. Supply the configured
-password if your device requires one:
+### Older Dachsportal
 
-```python
-async with Dachs("192.168.1.50", password="your-glt-password") as dachs:
-    await dachs.update()
-    print(dachs.serial_number, dachs.runtime_hours, dachs.starts)
-```
-
-This backend reads the MSR2 key catalogue: operating counters,
-temperatures, maintenance, actuator states, multi-module status, and the
-daily 15-minute run grid. It also supports raw key reads through
-`dachs.client.read_keys([...])`.
-
-### Old Dachsportal cloud (`cloud`)
-
-Use the portal ID, which is the trailing part of the serial number, and
-the password used by the DachsApp:
+Replace the example credentials with your portal ID (the last part of
+the serial number) and your DachsApp password.
 
 ```python
 async with Dachs.cloud("12345", "dachsapp-password") as dachs:
@@ -99,13 +77,12 @@ async with Dachs.cloud("12345", "dachsapp-password") as dachs:
     print(dachs.data_fetched_at)
 ```
 
-The portal returns cached polls, which can be several minutes old.
-`device_online` reports the portal's device status; `data_fetched_at` is
-its last poll timestamp when provided. A successful portal request does
-not necessarily mean the device is online.
+The portal caches readings, so they can be several minutes old. Check
+`device_online` for the unit's status and `data_fetched_at` for the last
+portal poll, when available. A successful request to the portal does not
+mean the unit itself is online.
 
-Additional portal methods are available on `dachs.client`, inside the
-connection's context:
+Reports, profiles, schedules, and statistics are available on `dachs.client`:
 
 ```python
 async with Dachs.cloud("12345", "dachsapp-password") as dachs:
@@ -116,179 +93,18 @@ async with Dachs.cloud("12345", "dachsapp-password") as dachs:
     statistics = await client.statistics("2026-9", "2026-11")
 ```
 
-Statistics use inclusive `YYYY-M` month ranges. Reports may contain
-operator contact details. The raw `client.metainfo()` response can include
-a session token, so do not log it verbatim.
-
-<!-- cloud2 (DachsConnect) is in development and not yet published;
-     the sections below return with it.
-
-### New DachsConnect cloud (`cloud2`)
-
-Use your DachsConnect / DachsPortal2 email and password. For a single-unit
-account, the client selects the unit automatically. For an account with
-multiple units, supply its serial number:
-
-```python
-async with Dachs.cloud2(
-    "you@example.com", "your-password", serial="96385"
-) as dachs:
-    await dachs.update()
-    print(dachs.power_w, dachs.electrical_energy_kwh)
-
-    # Read all native CanIP datapoints, not just the shared properties.
-    values = await dachs.client.read_datapoints()
-    for code, reading in values.items():
-        print(code, reading.value, reading.unit)
-
-    print("Cached values used:", dachs.client.values_stale)
-```
-
-Each connect runs a SAML SSO login (about five HTTPS round trips). If your
-application creates client objects repeatedly, carry the session across:
-after a successful connect, `client.session_cookies()` returns the current
-portal session; passing it to the next client's `cookies=` argument skips
-the login entirely while the session stays valid. An expired session falls
-back to the normal login, so this is always safe:
-
-```python
-cookies = old_client.session_cookies()
-new = Dachs.cloud2(email, password, serial=serial, cookies=cookies)
-```
-
-To discover serial numbers or switch between units, use `Cloud2Client`
-directly:
-
-```python
-from senertec_dachs import Cloud2Client
-
-async with Cloud2Client("you@example.com", "your-password") as client:
-    units = await client.units()
-    for unit in units:
-        print(unit.serial, unit.model, unit.location_name)
-
-    await client.switch_unit("96385")  # Use a serial from the list above.
-    values = await client.read_datapoints()
-```
-
-`read_datapoints()` requests all datapoints listed for the selected unit.
-Responses arrive over a WebSocket. Datapoints that do not respond are
-omitted from the result. Each reading includes the raw value,
-server-provided unit and gain, enum translation, and age. Cached replies
-are retained and flagged by `client.values_stale`.
-
-By default the read returns as soon as every datapoint has answered,
-live or from the portal's cache; values may then be older, and each
-reading's `age_seconds` plus `client.values_stale` tell you which came
-from the cache. Pass `read_datapoints(wait_for_live=True)` to hold the
-request open for live values only and accept the wait; on slow portals
-a full live read can take minutes.
-
-Pass `on_value=callback` to receive each value as its frame arrives on
-the websocket, before the read as a whole completes.
-
-### Curated display filter
-
-The full datapoint universe of one unit is well beyond dashboard
-material: it contains unset telemetry (battery datapoints on a unit
-without one), the portal's own debug datapoints (random token names,
-HTML test strings), raw epoch-millisecond timestamps, configuration
-counters, and the same signal on several boards. For user-facing
-surfaces, apply the admission filter; it keeps physical measurements,
-translated enum states, and converts epoch-millisecond values that its
-name marks as a timestamp into UTC `datetime` objects:
-
-```python
-from senertec_dachs.cloud2 import CanIpDisplayFilter
-
-values = await client.read_datapoints()
-dashboard = CanIpDisplayFilter().filter(values.values())
-```
-
-`admit(value)` applies the rules one value at a time and is therefore
-suited for streaming callbacks; `filter(values)` admits a batch in
-board-priority order so the canonical board keeps the plain name.
-Duplicate signals from other subsystems are kept, not dropped: a mirror
-board beyond the first occurrence gets the board as a name
-(``EM Actual power system``). Unnamed array elements (error timestamp
-logs, per-zone setup rows) stay out of the display set; only the
-current element is admitted, under its plain name, and named arrays
-(``Temperature sensor 6``) keep every element. Everything else the
-unit exposes remains available unfiltered through `read_datapoints()`
-and the listener.
-
-### Daily aggregates and unit identity (cloud v2)
-
-The portal website derives its daily cards from a separate chart
-endpoint. The client types those answers:
-
-```python
-await client.connect()
-days = await client.daily_electric()    # per-day kWh: self-consumed, fed-in, grid in/out
-heat = await client.daily_heat()        # per-day produced heat (kWh)
-run = await client.daily_run()          # per-day operating hours + starts
-shots = await client.shutdown_history() # hourly device state + shutdown reason
-print(client.unit_details().model)      # "Dachs Gen2 F5.5", serial, commissioning date, warnings
-```
-
-Each list is ordered oldest to newest; the last row of `daily_*` is
-the running total of the current day. Chart fields were verified
-against the production portal; anything not verifiable from the wire
-stays out of the typed records.
-
-### Datapoint names
-
-The portal ships a translation table with a display name for almost
-every datapoint (4117 of 4145 on the demo unit) in each supported
-language:
-
-```python
-names = client.display_names("de-de")   # or "en-gb"; client default if omitted
-print(names["IM009"])                   # 'Temperatur WR-G Modul Frequenzumrichter'
-```
-
-Every `CanIpValue` carries its `name` (None where the portal has no
-entry). The names are the portal's own, verified against the Dachs Gen2
-GLT manual (8098.003.000.09) for the documented identification codes.
-
-### Background listener
-
-```python
-def on_value(value):
-    print(value.board, value.code, value.value, value.unit)
-
-client.start_listener(on_value, interval=60)   # every datapoint, every 60 s
-...
-client.stop_listener()
-```
-
-The listener requests datapoints on a fixed interval and invokes the
-callback for each value frame the moment it arrives on the websocket;
-errors are retried with backoff. Keep the callback fast — it runs on
-the listener's event loop.
-
-You can optionally pass codes to request a subset. Results use plain
-codes such as `MM000`, board-qualified codes when needed to distinguish
-duplicates, and indexed keys for array elements such as `AM029[0]`.
-
-`dachs.update()` reads the subset mapped to the shared properties, not the
-entire CanIP catalogue. MSR2-specific fields, including actuator bitfields
-and MSR2 fault codes, return `None`. Native methods also include
-`get_errors()` for board errors and `chart_names()` / `chart(name)` for
-historical data.
-
--->
+Statistics take an inclusive range of months in `YYYY-M` format.
+Reports may contain contact details, and `client.metainfo()` may
+include a session token. Do not log or share those responses as is.
 
 ### MSR3 local access (`glt`)
 
-> **Experimental.** This backend was built from the GLT register-map
-> documentation and still needs verification against a real Dachs Gen2
-> unit — feedback from anyone with access to one is welcome.
+**Experimental:** I still need a Dachs Gen2 unit to test this on. If you
+have one and can try it, please [open an issue](https://github.com/skuzait/senertec-dachs/issues).
 
-On a Dachs Gen2, enable the GLT interface using parameter NP221. This is a
-Modbus TCP connection, not the MSR2 HTTP interface. Reads require no PIN.
-Keep the interface on a trusted local network; do not expose port 502 to
-the internet.
+Enable GLT with parameter NP221 on the controller. You do not need a PIN
+to read values. Keep Modbus TCP on your local network. Do not expose port
+502 to the internet.
 
 ```python
 async with Dachs.glt("192.168.1.42") as dachs:
@@ -303,29 +119,24 @@ async with Dachs.glt("192.168.1.42") as dachs:
     print(client.second_generator())
 ```
 
-Each update reads registers 8000 through 8083 in one request. Poll no
-faster than once per second. The shared properties include serial number,
-power, runtimes, starts, energies, inlet/outlet/outdoor temperatures, and
-requested module count. Energy counters have 0.1 kWh resolution.
-Commissioning date, part number, maintenance state, and detailed MSR2
-fault codes are not exposed by this register map.
+Each update reads registers 8000 through 8083. Poll at most once per
+second. You can read the serial number, power, runtimes, starts, energy,
+inlet, outlet and outdoor temperatures, and requested module count.
+Energy counters have 0.1 kWh resolution. This register map does not
+provide the commissioning date, part number, maintenance state, or
+detailed MSR2 fault codes.
 
-Client methods such as `profile()` and `status()` use the last read;
-they do not refresh it. `client.last_values` contains decoded register
-integers and strings, **before** applying the catalogue's scale factors.
-
-The implementation follows SenerTec's GLT specification
-8098.119.000.02 and was checked against the community ioBroker register
-map and a loopback Modbus server. It has not been tested on an MSR3 unit.
+`profile()` and `status()` use the last read. `client.last_values` has
+the decoded registers before scaling. The library follows SenerTec's GLT
+specification 8098.119.000.02.
 
 ## Values, units, and missing readings
 
-Power is exposed as whole watts through `power_w`. Energy counters use
-kWh, runtimes use hours, and temperatures use °C. Fractional readings use
-`decimal.Decimal` rather than binary floats.
+`power_w` uses whole watts. Energy is in kWh, runtime in hours, and
+temperature in °C. Fractional values use `decimal.Decimal`.
 
-For detailed availability information, inspect the snapshot returned by
-`update()`:
+To see why a reading is missing, check its state in the snapshot returned
+by `update()`:
 
 ```python
 async with Dachs("192.168.1.50") as dachs:
@@ -336,27 +147,25 @@ async with Dachs("192.168.1.50") as dachs:
 
 | State | Meaning |
 |---|---|
-| `AVAILABLE` | Parsed value with a verified unit |
-| `MISSING` | The response did not contain the key |
-| `INVALID` | The value could not be parsed; raw text is retained |
-| `UNVERIFIED` | The scale or meaning has not been confirmed |
-| `UNAVAILABLE` | A device sentinel, such as an unconnected temperature sensor |
+| `AVAILABLE` | Value with a known unit |
+| `MISSING` | The response did not include the key |
+| `INVALID` | The library could not parse the value |
+| `UNVERIFIED` | The scale or meaning is not confirmed |
+| `UNAVAILABLE` | The unit sent a special value, such as the code for a disconnected temperature sensor |
 
-Shared properties return a value only for `AVAILABLE` readings. The MSR2
-catalogue contains 118 keys, including fields without a convenience
-property. `snapshot.raw` retains the returned key/value texts. On newer
-backends this contains only the mapped fields, not the full native data.
+Properties return a value only for `AVAILABLE` readings. `snapshot.raw`
+contains the raw key and value strings. On MSR3 it covers only the fields
+the library maps to shared properties.
 
-If an update raises `DachsError`, the previous snapshot is retained and
-`device_online` becomes `False`. Do not treat the retained values as a
-successful new read. For local reads, `data_fetched_at` records the update
-time; it is not a device-supplied measurement timestamp.
+If `update()` raises `DachsError`, the library keeps the previous snapshot
+and sets `device_online` to `False`. Those values are from the last
+successful read. For local reads, `data_fetched_at` is the time the
+library read the device, not when the device measured the value.
 
 ## Control commands
 
-Read access and control support differ between backends. These commands
-operate physical equipment; check the controller configuration before
-using them.
+Check the controller settings before sending a command. These commands
+can start the unit or change its power demand.
 
 ### MSR2 local and old Dachsportal
 
@@ -367,22 +176,19 @@ async with Dachs("192.168.1.50") as dachs:
     # await dachs.request_power(2)
 ```
 
-`request_power(modules)` accepts 0 through 10 modules. External demand
-expires after ten minutes unless renewed. An acknowledgement does not
-prove that the engine started. The old-cloud `request_power()` path is
-implemented but has not been confirmed on a real portal.
+`request_power(modules)` accepts 0 to 10 modules. External demand expires
+after ten minutes unless renewed. A reply does not mean the engine
+started. `request_power()` has not been tested on the live Dachsportal.
 
 ### MSR3 Modbus TCP
 
-Use `GltClient.set_power_setpoint(watts)` and `set_locked(bool)` rather
-than the module-based methods above. Writes require the configured GLT
-PIN (NP222). The manual's screenshots show `1234`; check the setting on
-your controller rather than assuming that value is unchanged.
+For MSR3, use `GltClient.set_power_setpoint(watts)` and `set_locked(bool)`.
+To write values, pass the PIN configured in NP222 to `Dachs.glt()`.
 
-The setpoint uses 10 W steps. The controller accepts setpoint changes at
-most every five minutes and discards external control values if they are
-not renewed within ten minutes. `start_heartbeat()` returns a task that
-repeats the last written setpoint and lock state every 300 seconds:
+Setpoints use steps of 10 W. The controller accepts a new setpoint at
+most once every five minutes and drops external control values after ten
+minutes without renewal. `start_heartbeat()` repeats the last setpoint
+and lock state every 300 seconds:
 
 ```python
 from contextlib import suppress
@@ -399,18 +205,9 @@ async with Dachs.glt("192.168.1.42", pin=1234) as dachs:
             await heartbeat
 ```
 
-Cancel and await the heartbeat before closing the connection. Cancellation
-stops renewal; it is not an immediate engine-stop command. A Modbus write
-echo confirms delivery, not PIN validity or controller acceptance.
-
-### DachsConnect cloud
-
-<!-- cloud2 (DachsConnect) is in development and not yet published;
-     its experimental write interface (`write_datapoint()`) returns with it.
-`request_run()` and `request_power(modules)` raise `WriteError` on the
-`cloud2` and `glt` backends because their control interfaces differ from
-MSR2.
--->
+Cancel and await the heartbeat before closing the connection. This stops
+renewal but does not stop the engine immediately. A Modbus reply confirms
+delivery, not that the PIN was correct or that the unit applied the change.
 
 ## Error handling
 
@@ -419,42 +216,46 @@ Catch `DachsError` for library errors. Subclasses include
 `HttpError`, `ProtocolError`, `WriteError`, and `ModbusError`. Invalid
 arguments may raise `ValueError`.
 
-For write failures, inspect `error.outcome_unknown` before deciding what
-to do next. A command may have reached the controller even if its reply
-was lost. Do not blindly retry it.
+If a write fails, check `error.outcome_unknown` before trying again. If
+it is `True`, the controller may have received the command even though
+you did not get a reply.
 
 ## Protocol notes
 
-- Two MSR2 runtime keys are documented as seconds but report hours.
+* Two MSR2 runtime keys report hours even though the spec says seconds.
   The library returns hours.
-- Old Dachsportal values may differ slightly from local readings because
-  the portal calculates with binary floats and returns cached polls.
-- The old portal's thermal-energy counter includes the condenser share;
-  the local MSR2 counter reports the CHP unit alone.
+* Dachsportal caches readings and uses binary floats. Its values may
+  differ slightly from local readings.
+* The portal includes condenser heat in its thermal energy total. MSR2
+  local reports heat from the CHP unit alone.
 
 ### Unverified MSR2 fields
 
-The following ten keys remain `UNVERIFIED`. Raw values are available,
-but the library does not expose them as scaled properties.
+These keys are available as raw values, but the library does not scale
+them.
 
 | Key | Meaning to confirm |
 |---|---|
-| `BD3112.Ww_Bd.ulWwMengepA` | Annual hot-water volume and its unit |
-| `Hka_Mw1.Aktor.bWwPumpe` | Hot-water loading pump output and its scale |
+| `BD3112.Ww_Bd.ulWwMengepA` | Annual hot water volume and its unit |
+| `Hka_Mw1.Aktor.bWwPumpe` | Hot water loading pump output and its scale |
 | `Mm_MinMax.sBhMaxWart` / `sBhMinWart` | Maximum/minimum hours until maintenance |
 | `Mm_MinMax.ModulBhMax.ulWert` / `ModulBhMin.ulWert` | Maximum/minimum module operating hours |
 | `Hka_Ew.HydraulikNr.bSpeicherArt` / `bWW_Art` / `b2_Waermeerzeuger` / `bMehrmodul` | Hydraulic configuration codes |
 
-To help verify them, read the keys with `dachs.client.read_keys([...])`
-on MSR2 or the old portal and compare them with the controller display.
-An issue with the raw response, displayed value, controller version, and
-relevant operating state is useful evidence. Remove credentials and
-personal details before sharing captures.
+If you can confirm a value, read the key on MSR2 or Dachsportal with
+`dachs.client.read_keys([...])` and compare it with the controller
+display. In your issue, include the raw and displayed values, the
+controller version, and what the unit was doing. Remove credentials and
+personal information first.
 
 ## Examples
 
-Each script documents its environment variables at the top. Run them with
-the library installed, for example `python examples/read_local.py`.
+The scripts list their environment variables at the top. Once the
+library is installed, work from the repository root and run a script:
+
+```sh
+python examples/read_local.py
+```
 
 | Script | Purpose |
 |---|---|
@@ -464,9 +265,7 @@ the library installed, for example `python examples/read_local.py`.
 | [read_all.py](examples/read_all.py) | Every MSR2 catalogue key and its reading state |
 | [mqtt_publish.py](examples/mqtt_publish.py) | MSR2 local or old Dachsportal readings to MQTT; requires `paho-mqtt` |
 
-The `read_*` backend examples do not send control commands. A
-`read_cloud2.py` example for the (still unpublished) DachsConnect backend
-ships with the release that publishes cloud2.
+The `read_*` examples do not send control commands.
 
 ## Development
 
@@ -477,9 +276,8 @@ python -m pip install -e ".[test]"
 python -m pytest -q
 ```
 
-The tests use loopback HTTP, WebSocket, and Modbus servers; no device or
-portal credentials are required. The MSR2 protocol fixture is in
-`tests/fixtures/local-protocol.json`.
+Tests run against local HTTP, WebSocket, and Modbus servers. You do not
+need a Dachs unit or portal credentials.
 
 ## License
 
